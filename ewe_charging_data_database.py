@@ -1,22 +1,14 @@
-from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
 import paho.mqtt.client as mqtt
-import configparser
 import requests
-import logging
 import time
 import csv
 import re
 import os
 
-# Email packages
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
-
-print(f"[{datetime.now().strftime('%d-%m-%Y %H:%M:%S')}] Script started")
+now = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
+print(f"[{now}] Script started")
 
 
 
@@ -24,11 +16,21 @@ print(f"[{datetime.now().strftime('%d-%m-%Y %H:%M:%S')}] Script started")
 ############# LOAD CONFIG #############
 #######################################
 
-print(os.getcwd())
+import configparser
 
-# Parse the config file
-config = configparser.ConfigParser()
-config.read("/data/user-app/charging_data/charging_data.conf")
+config_path = "charging_data.conf"
+
+# Check if config file exists
+if os.path.isfile(config_path):
+    # Parse the config file
+    config = configparser.ConfigParser()
+    config.read("charging_data.conf")
+
+else:
+    # If the config file wasn't found terminate the script
+    print(f"Config file not found, expected filename: {config_path}")
+    print("Terminating the script")
+    exit()
 
 ###########################################
 ############# END LOAD CONFIG #############
@@ -39,6 +41,9 @@ config.read("/data/user-app/charging_data/charging_data.conf")
 #######################################
 ############# SET LOGGING #############
 #######################################
+
+from logging.handlers import RotatingFileHandler
+import logging
 
 # Set the log location
 log_folder_path = config["LogSettings"]["LogFolder"]
@@ -75,6 +80,26 @@ logging.basicConfig(
 
 ###########################################
 ############# END SET LOGGING #############
+###########################################
+
+
+
+###########################################
+############# SQLITE DATABASE #############
+###########################################
+        
+import sqlalchemy as db
+from models import Base, Controller, State, Session, Email
+
+database_name = config["DatabaseSettings"]["DatabaseName"]
+
+engine = db.create_engine(f"sqlite:///{database_name}")
+
+# Create the database schema
+Base.metadata.create_all(engine)
+
+###########################################
+############# END SQLITE DATABASE #########
 ###########################################
 
 
@@ -312,7 +337,7 @@ def on_vehicle_status_changed(client, userdata, message):
 
     # If vehicle is connected
     if vehicle_state in connected_vehicle_state:
-        print(f"[{datetime.now().strftime('%d-%m-%Y %H:%M:%S')}] EV connected! deviceUid: {device_uid}")
+        print(f"[{now}] EV connected! deviceUid: {device_uid}")
         logging.info(f"EV connected to deviceUid: {device_uid}")
 
         # If the API calls were successful
@@ -421,7 +446,7 @@ def on_vehicle_status_changed(client, userdata, message):
 
     # If vehicle is NOT connected
     else:
-        print(f"[{datetime.now().strftime('%d-%m-%Y %H:%M:%S')}] EV disconnected! deviceUid: {device_uid}")
+        print(f"[{now}] EV disconnected! deviceUid: {device_uid}")
         logging.info(f"EV disconnected from deviceUid: {device_uid}")
 
         # Set the last known state to 'disconnected'
@@ -520,7 +545,7 @@ def set_email_status(month):
         # Open the state file in overwrite mode
         file = open(email_file_path, "w")
 
-        file.write(f"Email pro odbobí {month} odeslán: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+        file.write(f"Email pro odbobí {month} odeslán: {now}")
 
 ################################################
 ############# END SET EMAIL STATUS #############
@@ -550,6 +575,11 @@ def get_last_month_code():
 ######################################
 ############# SEND EMAIL #############
 ######################################
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 
 # Get the last month and year in mmyy format 
 last_month = get_last_month_code()
