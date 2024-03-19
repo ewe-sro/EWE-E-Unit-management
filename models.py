@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, DateTime
+from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Time
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -18,18 +18,21 @@ class State(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     state = Column(String)
-    device_uid = Column(Integer, ForeignKey("charging_controllers.device_uid"), nullable=False)
+    device_uid = Column(String, ForeignKey("charging_controllers.device_uid"), nullable=False)
 
 class Session(Base):
     __tablename__ = "charging_sessions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    rfid_tag = Column(String)
+    rfid_timestamp = Column(DateTime)
     start_real_power_Wh = Column(Integer)
     end_real_power_Wh = Column(Integer)
     consumption_Wh = Column(Integer)
     start_timestamp = Column(DateTime)
     end_timestamp = Column(DateTime)
-    device_uid = Column(Integer, ForeignKey("charging_controllers.device_uid"), nullable=False)
+    duration = Column(Time)
+    device_uid = Column(String, ForeignKey("charging_controllers.device_uid"), nullable=False)
 
 class Email(Base):
     __tablename__ = "sent_emails"
@@ -38,4 +41,4 @@ class Email(Base):
     timestamp = Column(DateTime)
     sender = Column(String)
     receiver = Column(String)
-    device_uid = Column(Integer, ForeignKey("charging_controllers.device_uid"), nullable=False)
+    device_uid = Column(String, ForeignKey("charging_controllers.device_uid"), nullable=False)
