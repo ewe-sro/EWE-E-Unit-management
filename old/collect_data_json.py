@@ -1,13 +1,4 @@
 #######################################
-# VERSION 0.1
-#
-# @ 2024 EWE s.r.o.
-# WWW: mobility.ewe.cz
-#######################################
-
-
-
-#######################################
 ############# LOAD CONFIG #############
 #######################################
 
@@ -49,21 +40,16 @@ api_port = config["RestApi"]["Port"]
 def call_charger_api(api_call):
     # Make a REST API call to get the current energy data
     api_url = f"http://{api_address}:{api_port}/api/v1.0/{api_call}"
+    response = requests.get(api_url)
 
-    try:
-        response = requests.get(api_url)
+    # If the API response is successful
+    if response.status_code == 200:
+        logging.info(f"COLLECT DATA: API call was successful, URL: {api_url}")
 
-        # If the API response is successful
-        if response.status_code == 200:
-            # Parse the response JSON data
-            return response.json()
+        # Parse the response JSON data
+        return response.json()
     
-        else:
-            logging.error(f"COLLECT DATA: API call failed, URL: {api_url}")
-
-            return False
-        
-    except:
+    else:
         logging.error(f"COLLECT DATA: API call failed, URL: {api_url}")
 
         return False
@@ -71,14 +57,21 @@ def call_charger_api(api_call):
 ################################################
 ############# END CHARGER API CALL #############
 ################################################
+    
 
 
+############################################################
+############# COLLECT CONTROLLER DATA FROM API #############
+############################################################
 
-###################################################
-############# COLLECT CONTROLLER DATA #############
-###################################################
-
+import os
+import json
+import threading
+    
 def collect_controller_data():
+    # Set threading timer
+    threading.Timer(5, collect_controller_data).start()
+
     # Create a dictionary object for output data
     output_data = {}
 
@@ -100,7 +93,6 @@ def collect_controller_data():
             for point in charging_point_data["charging_points"]:
                 # If device_uid is the same as the current controller_uid
                 if charging_point_data["charging_points"][point]["charging_controller_device_uid"] == controller:
-                    charging_point_id = charging_point_data["charging_points"][point]["id"]
                     charging_point_name = charging_point_data["charging_points"][point]["charging_point_name"]
 
             # Add the controller data to output dictionary
@@ -111,7 +103,6 @@ def collect_controller_data():
                 "hardware_version": controller_data[controller]["hardware_version"],
                 "parent_device_uid": controller_data[controller]["parent_device_uid"],
                 "position": controller_data[controller]["position"],
-                "charging_point_id": charging_point_id,
                 "charging_point_name": charging_point_name
             }
 
@@ -165,57 +156,24 @@ def collect_controller_data():
             output_data[controller]["charging_data"]["connected_state"] = connected_state
             output_data[controller]["charging_data"]["connected_time_sec"] = connected_time_data["connected_time_sec"]
             output_data[controller]["charging_data"]["charge_time_sec"] = charge_time_data["charge_time_sec"]
+            
 
-    return output_data
+        # Set the data folder and file name
+        data_folder_path = config["AppSettings"]["FileFolder"]
 
-#######################################################
-############# END COLLECT CONTROLLER DATA #############
-####################################################### 
+        # Check if folder for data DOESN'T exists
+        if not os.path.isdir(data_folder_path):
+            # Create the data folder
+            os.makedirs(data_folder_path)
 
+        json_file_name = data_folder_path + "controller_data.json"
 
-
-############################################################
-############# COLLECT CONTROLLER DATA FROM API #############
-############################################################
-
-import os
-import json
-import threading
-
-from utils import save_to_emm
-
-def controller_data_to_json():
-    config = load_config()
-    
-    emm_api_host = config["EmmSettings"]["Host"]
-    emm_api_key = config["EmmSettings"]["ApiKey"]
-    emm_api_url = f"{emm_api_host}/api/public/controller-data"
-
-    # Set threading timer
-    threading.Timer(5, controller_data_to_json).start()
-
-    output_data = collect_controller_data()
-
-    # Set the data folder and file name
-    data_folder_path = config["AppSettings"]["FileFolder"]
-
-    # Check if folder for data DOESN'T exists
-    if not os.path.isdir(data_folder_path):
-        # Create the data folder
-        os.makedirs(data_folder_path)
-
-    json_file_name = data_folder_path + "controller_data.json"
-
-    # Save the collected data to JSON file
-    with open(json_file_name, "w") as json_file:
-        json.dump(output_data, json_file)
-
-    # If EMM API is configured also save to EMM web app
-    if emm_api_host != "" and emm_api_key != "" and emm_api_url != "":
-        save_to_emm(output_data, emm_api_url, emm_api_key)
+        # Save the collected data to JSON file
+        with open(json_file_name, "w") as json_file:
+            json.dump(output_data, json_file)
 
 ################################################################
 ############# END COLLECT CONTROLLER DATA FROM API #############
 ################################################################
     
-controller_data_to_json()
+collect_controller_data()
