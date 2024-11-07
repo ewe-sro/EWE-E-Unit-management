@@ -1,7 +1,7 @@
 from datetime import datetime
 import os
 
-now = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
+now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 #######################################
 ############# LOAD CONFIG #############
@@ -9,8 +9,9 @@ now = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
 
 import configparser
 
-#config_path = "/data/user-app/charging_data/charging_data.conf"
+# config_path = "/data/user-app/charging_data/charging_data.conf"
 config_path = "./charging_data.conf"
+
 
 def load_config():
     # Check if config file exists
@@ -27,10 +28,10 @@ def load_config():
         print(f"[{now}] Terminating the script")
         exit()
 
+
 ###########################################
 ############# END LOAD CONFIG #############
 ###########################################
-        
 
 
 #######################################
@@ -39,6 +40,7 @@ def load_config():
 
 from logging.handlers import RotatingFileHandler
 import logging
+
 
 def set_logging(config):
     # Set the log location
@@ -63,27 +65,22 @@ def set_logging(config):
         maxBytes=log_max_size,
         backupCount=int(config["LogSettings"]["LogFileSplits"]),
         encoding=None,
-        delay=0
+        delay=0,
     )
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format=log_format,
-        handlers=[
-            rfh
-        ]
-    )
+    logging.basicConfig(level=logging.INFO, format=log_format, handlers=[rfh])
+
 
 ###########################################
 ############# END SET LOGGING #############
 ###########################################
-        
 
 
 #######################################################
 ############# GET LAST KNOWN DEVICE STATE #############
 #######################################################
-    
+
+
 def get_last_known_state(device_uid, config):
     state_folder_path = config["AppSettings"]["FileFolder"] + ".device_states/"
     state_file_path = state_folder_path + device_uid + ".state"
@@ -105,19 +102,20 @@ def get_last_known_state(device_uid, config):
             return state
         else:
             return False
-        
+
     else:
         return False
+
 
 ###########################################################
 ############# END GET LAST KNOWN DEVICE STATE #############
 ###########################################################
 
 
-
 #######################################################
 ############# SET LAST KNOWN DEVICE STATE #############
 #######################################################
+
 
 def set_last_known_state(device_uid, state, config):
     state_folder_path = config["AppSettings"]["FileFolder"] + ".device_states/"
@@ -140,30 +138,36 @@ def set_last_known_state(device_uid, state, config):
     else:
         logging.info(f"Incorrect device state deviceUid: {device_uid}, state: {state}")
 
+
 ###########################################################
 ############# END SET LAST KNOWN DEVICE STATE #############
 ###########################################################
-        
 
 
 #########################################
 ############# READ CSV DATA #############
 #########################################
 
+
 def read_csv_data(csv_file, device_uid):
     # Open the existing CSV
     open_csv = open(csv_file, "r")
+
     # Read the CSV data
     reader = csv.DictReader(open_csv)
+
     # Put the data inside a list
     current_data = list(reader)
+
     # Set the variables for data updating
     highest_id = 0
     edit_row = None
     start_real_power = None
     start_timestamp = ""
+
     # Set the variable for checking if the charging session is completed already
     end_timestamp = ""
+
     # RFID variables
     rfid_timestamp = ""
     rfid_tag = ""
@@ -180,20 +184,28 @@ def read_csv_data(csv_file, device_uid):
             rfid_timestamp = row["rfidTimestamp"]
             rfid_tag = row["rfidTag"]
 
+    return (
+        current_data,
+        edit_row,
+        start_real_power,
+        start_timestamp,
+        end_timestamp,
+        rfid_timestamp,
+        rfid_tag,
+    )
 
-    return current_data, edit_row, start_real_power, start_timestamp, end_timestamp, rfid_timestamp, rfid_tag
 
 #############################################
 ############# END READ CSV DATA #############
 #############################################
-        
 
 
 ########################################################
 ############# GET HIGHEST ID FROM CSV DATA #############
 ########################################################
-        
+
 import csv
+
 
 def get_highest_id(csv_file):
     # Open the existing CSV
@@ -218,10 +230,10 @@ def get_highest_id(csv_file):
 
     return highest_id
 
+
 ############################################################
 ############# END GET HIGHEST ID FROM CSV DATA #############
 ############################################################
-
 
 
 ############################################
@@ -231,31 +243,34 @@ def get_highest_id(csv_file):
 import requests
 import json
 
+
 def save_to_emm(data, api_url, api_key):
     try:
         # Request headers
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            "Authorization": f"Bearer {api_key}",
         }
 
         requests.post(api_url, data=json.dumps(data), headers=headers)
-    
+
     except:
         logging.error(f"API call to EMM failed, URL: {api_url}")
+
 
 ################################################
 ############# END SAVE DATA TO EMM #############
 ################################################
 
 
-
 ###############################################
 ############# IS DATETIME BETWEEN #############
 ###############################################
 
+
 def is_between_dates(start_datetime, end_datetime, target_datetime):
     return start_datetime <= target_datetime <= end_datetime
+
 
 ###################################################
 ############# END IS DATETIME BETWEEN #############

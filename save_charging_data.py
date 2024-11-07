@@ -1,10 +1,10 @@
 #######################################
-# VERSION 0.1
+# VERSION 0.2
+# DATE 07/11/2024
 #
 # @ 2024 EWE s.r.o.
 # WWW: mobility.ewe.cz
 #######################################
-
 
 
 from datetime import datetime, timedelta
@@ -13,9 +13,8 @@ import csv
 import re
 import os
 
-now = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
+now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 print(f"[{now}] Script started")
-
 
 
 #######################################
@@ -24,12 +23,13 @@ print(f"[{now}] Script started")
 
 from utils import load_config
 
-config = load_config()
+config = (
+    load_config()  # Loads config from /data/user-app/charging_data/charging_data.conf
+)
 
 ###########################################
 ############# END LOAD CONFIG #############
 ###########################################
-
 
 
 #######################################
@@ -44,7 +44,6 @@ set_logging(config)
 ###########################################
 ############# END SET LOGGING #############
 ###########################################
-
 
 
 ###################################################
@@ -64,6 +63,7 @@ api_port = config["RestApi"]["Port"]
 # Topic to find out if vehicle is connected
 topic = "charging_controllers/+/data/iec_61851_state"
 
+
 # Callback when the client connects to the broker
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -73,18 +73,19 @@ def on_connect(client, userdata, flags, rc):
     else:
         logging.error(f"Failed to connect to MQTT broker with result code {rc}")
 
+
 ###############################################
 ############# END MQTT CONNECTION #############
 ###############################################
-        
 
-        
+
 ############################################
 ############# CHARGER API CALL #############
 ############################################
-        
+
 import requests
-        
+
+
 def call_charger_api(api_call):
     # Make a REST API call to get the current energy data
     api_url = f"http://{api_address}:{api_port}/api/v1.0/{api_call}"
@@ -94,16 +95,16 @@ def call_charger_api(api_call):
     if response.status_code == 200:
         # Parse the response JSON data
         return response.json()
-    
+
     else:
         logging.error(f"API call failed, URL: {api_url}")
 
         return False
 
+
 ################################################
 ############# END CHARGER API CALL #############
 ################################################
-
 
 
 ############################################
@@ -118,6 +119,7 @@ record_id = 1
 data_folder_path = config["AppSettings"]["FileFolder"]
 csv_file_name = data_folder_path + "charging_data.csv"
 
+
 def save_to_csv(data, state):
     global record_id
 
@@ -129,49 +131,61 @@ def save_to_csv(data, state):
     if state == "connected":
         # CSV file already exists
         if os.path.isfile(csv_file_name):
-            logging.info(f"CSV file already exists, adding data to file: {csv_file_name}")
-    
+            logging.info(
+                f"CSV file already exists, adding data to file: {csv_file_name}"
+            )
+
             # Write the data to the CSV file
             with open(csv_file_name, "a", newline="") as csv_file:
                 # Pass the file object and dictionary to DictWriter()
                 writer = csv.DictWriter(csv_file, fieldnames=data.keys())
-    
+
                 # Write the row with data
                 writer.writerow(data)
-    
+
                 csv_file.close()
-    
+
             logging.info(f"Data was successfully added to the CSV file")
-    
+
         # CSV file doesn't exists
         else:
             logging.info(f"CSV wasn't found, creating a new CSV file: {csv_file_name}")
-    
+
             # Write the data to the CSV file
             with open(csv_file_name, "w", newline="") as csv_file:
                 # Pass the file object and dictionary to DictWriter()
                 writer = csv.DictWriter(csv_file, fieldnames=data.keys())
-    
+
                 # Write the header row
                 writer.writeheader()
-    
+
                 # Write the row with data
                 writer.writerow(data)
-    
+
                 csv_file.close()
-    
+
             # Increase the number of ID
             record_id += 1
-    
+
             logging.info(f"Data was successfully added to the CSV file")
 
     elif state == "disconnected":
         # CSV file already exists
         if os.path.isfile(csv_file_name):
-            logging.info(f"CSV file already exists, adding data to file: {csv_file_name}")
+            logging.info(
+                f"CSV file already exists, adding data to file: {csv_file_name}"
+            )
 
             # Read current CSV data and assign corresponding variables
-            current_data, edit_row, start_real_power, start_timestamp, end_timestamp, rfid_timestamp, rfid_tag = read_csv_data(csv_file_name, data["deviceUid"])
+            (
+                current_data,
+                edit_row,
+                start_real_power,
+                start_timestamp,
+                end_timestamp,
+                rfid_timestamp,
+                rfid_tag,
+            ) = read_csv_data(csv_file_name, data["deviceUid"])
 
             # If charging session data was found and the endTimestamp is empty
             if edit_row is not None and end_timestamp == "":
@@ -182,11 +196,17 @@ def save_to_csv(data, state):
                 duration = end_datetime - start_datetime
 
                 # Check if an RFID chip was used and pair it to the charging session
-                if (rfid_timestamp == "" and rfid_tag == "") and data["rfidTimestamp"] != "":
+                if (rfid_timestamp == "" and rfid_tag == "") and data[
+                    "rfidTimestamp"
+                ] != "":
                     # Convert RFID timestamp to datetime object
-                    rfid_datetime = start_datetime = datetime.fromisoformat(data["rfidTimestamp"])
+                    rfid_datetime = start_datetime = datetime.fromisoformat(
+                        data["rfidTimestamp"]
+                    )
 
-                    if not is_between_dates(start_datetime, end_datetime, rfid_datetime):
+                    if not is_between_dates(
+                        start_datetime, end_datetime, rfid_datetime
+                    ):
                         data["rfidTimestamp"] = None
                         data["rfidTag"] = None
 
@@ -194,10 +214,9 @@ def save_to_csv(data, state):
                     data["rfidTimestamp"] = rfid_timestamp
                     data["rfidTag"] = rfid_tag
 
-
                 # Update the corresponding row with current data
-                edit_row["rfidTag"] = data["rfidTimestamp"]
-                edit_row["rfidTimestamp"] = data["rfidTag"]
+                edit_row["rfidTag"] = data["rfidTag"]
+                edit_row["rfidTimestamp"] = data["rfidTimestamp"]
                 edit_row["endRealPowerWh"] = data["endRealPowerWh"]
                 edit_row["consumptionWh"] = data["endRealPowerWh"] - start_real_power
                 edit_row["endTimestamp"] = data["endTimestamp"]
@@ -205,7 +224,7 @@ def save_to_csv(data, state):
 
                 # Write the data to the CSV file
                 with open(csv_file_name, "w", newline="") as csv_file:
-                     # Pass the file object and dictionary to DictWriter()
+                    # Pass the file object and dictionary to DictWriter()
                     writer = csv.DictWriter(csv_file, fieldnames=edit_row.keys())
 
                     # Write the header row
@@ -222,25 +241,35 @@ def save_to_csv(data, state):
 
                     csv_file.close()
 
-                logging.info(f"Data was successfully added to the CSV file, id of the charging session: {edit_row['id']}")
+                logging.info(
+                    f"Data was successfully added to the CSV file, id of the charging session: {edit_row['id']}"
+                )
+
 
 ################################################
 ############# END SAVE DATA TO CSV #############
 ################################################
 
 
-
 ####################################################
 ############# ON VEHICLE STATUS CHANGE #############
 ####################################################
-    
-from utils import read_csv_data, get_highest_id, get_last_known_state, set_last_known_state, save_to_emm
 
+from utils import (
+    read_csv_data,
+    get_highest_id,
+    get_last_known_state,
+    set_last_known_state,
+    save_to_emm,
+)
+
+
+# Function that is triggered on MQTT callback from the charger
 def on_vehicle_status_changed(client, userdata, message):
     global record_id
 
     config = load_config()
-    
+
     emm_api_host = config["EmmSettings"]["Host"]
     emm_api_key = config["EmmSettings"]["ApiKey"]
     emm_api_url = f"{emm_api_host}/api/public/charging-session"
@@ -251,11 +280,10 @@ def on_vehicle_status_changed(client, userdata, message):
     # Vehicle connected states
     connected_vehicle_state = ["B1", "B2", "C1", "C2", "D1", "D2"]
 
-
     ##############################################
     ############# GET THE DEVICE UID #############
     ##############################################
-    
+
     # Define a regular expression pattern to find a device_uid from message topic
     pattern = r"/([^/]+)/"
     # Find device_uid from the message topic
@@ -268,7 +296,6 @@ def on_vehicle_status_changed(client, userdata, message):
     ##################################################
     ############# END GET THE DEVICE UID #############
     ##################################################
-
 
     ########################################
     ############# GET API DATA #############
@@ -288,10 +315,10 @@ def on_vehicle_status_changed(client, userdata, message):
 
     # Loop over the charging points and their data
     for index, data in charging_point_data["charging_points"].items():
-       # Check if the device_uid matches current device_uid variable
-       if data["charging_controller_device_uid"] == device_uid:
-           charging_point_id = data["id"]
-           charging_point_name = data["charging_point_name"]
+        # Check if the device_uid matches current device_uid variable
+        if data["charging_controller_device_uid"] == device_uid:
+            charging_point_id = data["id"]
+            charging_point_name = data["charging_point_name"]
 
     point_config_url = f"charging-points/{charging_point_id}/config"
     point_config_data = call_charger_api(point_config_url)
@@ -321,13 +348,16 @@ def on_vehicle_status_changed(client, userdata, message):
 
             # Get the time difference between RFID timestamp and start timestamp of the charging session
             if rfid_data["rfid"]["timestamp"] != "":
-                rfid_difference = abs(datetime.fromisoformat(rfid_data["rfid"]["timestamp"]) - datetime.fromisoformat(energy_data["energy"]["timestamp"]))
-        
+                rfid_difference = abs(
+                    datetime.fromisoformat(rfid_data["rfid"]["timestamp"])
+                    - datetime.fromisoformat(energy_data["energy"]["timestamp"])
+                )
+
                 # Check if RFID timestamp is within 60 seconds of the start of the charging session
                 if rfid_difference > timedelta(seconds=60):
                     rfid_data["rfid"]["tag"] = ""
                     rfid_data["rfid"]["timestamp"] = ""
-        
+
             # If data rfidTimestamp is empty set to RFID data to empty
             else:
                 rfid_data["rfid"]["tag"] = ""
@@ -343,7 +373,7 @@ def on_vehicle_status_changed(client, userdata, message):
                     # Get the current highest id of charging session
                     highest_id = get_highest_id(csv_file_name)
                     record_id = highest_id + 1
-                
+
                 # Collect all the data from API calls in a dictionary
                 data = {
                     "id": record_id,
@@ -351,14 +381,16 @@ def on_vehicle_status_changed(client, userdata, message):
                     "chargingPointName": charging_point_name,
                     "rfidTag": rfid_data["rfid"]["tag"],
                     "rfidTimestamp": rfid_data["rfid"]["timestamp"],
-                    "startRealPowerWh": energy_data["energy"]["energy_real_power"]["value"],
+                    "startRealPowerWh": energy_data["energy"]["energy_real_power"][
+                        "value"
+                    ],
                     "endRealPowerWh": None,
                     "consumptionWh": None,
                     "startTimestamp": energy_data["energy"]["timestamp"],
                     "endTimestamp": None,
-                    "duration": None
+                    "duration": None,
                 }
-                
+
                 # Save the data to CSV
                 save_to_csv(data, "connected")
 
@@ -368,11 +400,12 @@ def on_vehicle_status_changed(client, userdata, message):
 
                 # Set the last known state to 'connected'
                 set_last_known_state(device_uid, "connected", config)
-                logging.info(f"Changing the last known state to 'connected' deviceUid: {device_uid}")
+                logging.info(
+                    f"Changing the last known state to 'connected' deviceUid: {device_uid}"
+                )
 
         else:
             logging.error(f"API calls were unsuccessful, exiting")
-
 
     # If vehicle is NOT connected/disconnected
     else:
@@ -381,7 +414,9 @@ def on_vehicle_status_changed(client, userdata, message):
 
         # Set the last known state to 'disconnected'
         set_last_known_state(device_uid, "disconnected", config)
-        logging.info(f"Changing the last known state to 'disconnected' deviceUid: {device_uid}")
+        logging.info(
+            f"Changing the last known state to 'disconnected' deviceUid: {device_uid}"
+        )
 
         # If the API calls were successful
         if energy_data and rfid_data != False:
@@ -391,7 +426,7 @@ def on_vehicle_status_changed(client, userdata, message):
                 "rfidTag": rfid_data["rfid"]["tag"],
                 "rfidTimestamp": rfid_data["rfid"]["timestamp"],
                 "endRealPowerWh": energy_data["energy"]["energy_real_power"]["value"],
-                "endTimestamp": energy_data["energy"]["timestamp"]
+                "endTimestamp": energy_data["energy"]["timestamp"],
             }
 
             # Save the data to CSV
@@ -404,10 +439,10 @@ def on_vehicle_status_changed(client, userdata, message):
         else:
             logging.error(f"API calls were unsuccessful, exiting")
 
+
 ########################################################
 ############# END ON VEHICLE STATUS CHANGE #############
 ########################################################
-
 
 
 # Create an MQTT client instance
