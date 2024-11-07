@@ -25,3 +25,10 @@ Pro stahování CSV souboru s nabíjecími daty nahráváme na kontrolery také 
 Na webové stránce zobrazujeme také obecné informace o nabíjecích kontrolerech. Vzhledem k tomu, že webová stránka je statická a nemá žádný backend, museli bychom data o kontrolerech získat z API požadavkem přímo z klienta. Z toho důvodu jsme vytvořili Python skript, který každých 5 sekund získá data z API a uloží je do JSON souboru, který se nachází přímo v adresáři webové stránky.
 
 - **_collect_data_json.py_** - skript, který získá data kontroleru z API a uloží je do JSON souboru
+
+Stejně jako u předešlého skriptu je potřeba upravit soubor **_data/user-app/user-application-start_**, aby se skript automaticky spustil při startu kontroleru.
+
+```
+# Collect charging controller data to JSON
+/usr/bin/python3 /data/user-app/charging_data/collect_data_json.py &
+```
