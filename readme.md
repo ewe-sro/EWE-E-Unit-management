@@ -20,6 +20,12 @@ Aby se skript automaticky spustil, je potřeba upravit soubor **_data/user-app/u
 /usr/bin/python3 /data/user-app/charging_data/save_charging_data.py &
 ```
 
+### Spuštění skriptu bez nutnosti restartu
+
+```
+nohup /usr/bin/python3 /data/user-app/charging_data/save_charging_data.py &
+```
+
 ## Skript pro vytvoření JSON souboru s daty kontroleru
 
 Pro stahování CSV souboru s nabíjecími daty nahráváme na kontrolery také vlastní webovou stránku.
