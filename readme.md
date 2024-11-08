@@ -1,7 +1,6 @@
 # EWE - Charging data
 
-Python skript **_ewe_charging_data_native_csv.py_** čeká na připojení/odpojení automobilu a následně zpracuje
-aktuální data a uloží je do CSV souboru.
+Python skript **_save_charging_data.py_** čeká na připojení/odpojení automobilu a následně zpracuje aktuální nabíjecí data, uloží je do CSV souboru a případně odešle do EMM aplikace.
 
 ## Instalace skriptu
 
