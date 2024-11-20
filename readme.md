@@ -22,7 +22,7 @@ Aby se skript automaticky spustil, je potřeba upravit soubor **_data/user-app/u
 ## Skript pro vytvoření JSON souboru s daty kontroleru
 
 Pro stahování CSV souboru s nabíjecími daty nahráváme na kontrolery také vlastní webovou stránku.
-Na webové stránce zobrazujeme také obecné informace o nabíjecích kontrolerech. Vzhledem k tomu, že webová stránka je statická a nemá žádný backend, museli bychom data o kontrolerech získat z API požadavkem přímo z klienta. Z toho důvodu jsme vytvořili Python skript, který každých 5 sekund získá data z API a uloží je do JSON souboru, který se nachází přímo v adresáři webové stránky.
+Na webové stránce zobrazujeme také obecné informace o nabíjecích kontrolerech. Vzhledem k tomu, že webová stránka je statická a nemá žádný backend, museli bychom data o kontrolerech získat z API požadavkem přímo z klienta. Z toho důvodu jsme vytvořili Python skript, který každých 5 sekund získá data z API a uloží je do JSON souboru, který se nachází přímo v adresáři webové stránky. Tento skript také odesílá data do webové aplikace EMM, pokud je v konfiguračním souboru nastaven API klíč.
 
 - **_collect_data_json.py_**
 
