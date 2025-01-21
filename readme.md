@@ -33,9 +33,20 @@ Stejně jako u předešlého skriptu je potřeba upravit soubor **_data/user-app
 /usr/bin/python3 /data/user-app/charging_data/collect_data_json.py &
 ```
 
+## Skript pro synchronizaci nastavení s EMM
+
+Abychom mohli změnit nastavení vzdáleně pomocí webové aplikace EMM běží na nabíjecí stanici tento skript. Skript nejdříve získá nastavení z EMM, pokud nějaká existují, tato nastavení aplikuje.
+Následně získá aktuální nastavení nabíjecího bodu a tato nastavení odešle do EMM k uložení. Tento způsob nám dovoluje upravit nastavení jak z webové aplikace, tak z lokální administrace nabíjecí stanice a zároveň zůstanou data o nastavení v EMM konzistentní.
+
+```
+# Sync controller settings with EMM database
+/usr/bin/python3 /data/user-app/charging_data/sync_settings.py &
+```
+
 ### Spuštění skriptů bez nutnosti restartu
 
 ```
 nohup /usr/bin/python3 /data/user-app/charging_data/save_charging_data.py &
 nohup /usr/bin/python3 /data/user-app/charging_data/collect_data_json.py &
+nohup /usr/bin/python3 /data/user-app/charging_data/sync_settings.py &
 ```
