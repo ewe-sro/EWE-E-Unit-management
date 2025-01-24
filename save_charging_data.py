@@ -56,10 +56,6 @@ import paho.mqtt.client as mqtt
 broker_address = config["Mqtt"]["Host"]
 broker_port = int(config["Mqtt"]["Port"])
 
-# REST API settings
-api_address = config["RestApi"]["Host"]
-api_port = config["RestApi"]["Port"]
-
 # Topic to find out if vehicle is connected
 topic = "charging_controllers/+/data/iec_61851_state"
 
@@ -79,33 +75,6 @@ def on_connect(client, userdata, flags, rc):
 ###############################################
 
 
-############################################
-############# CHARGER API CALL #############
-############################################
-
-import requests
-
-
-def call_charger_api(api_call):
-    # Make a REST API call to get the current energy data
-    api_url = f"http://{api_address}:{api_port}/api/v1.0/{api_call}"
-    response = requests.get(api_url)
-
-    # If the API response is successful
-    if response.status_code == 200:
-        # Parse the response JSON data
-        return response.json()
-
-    else:
-        logging.error(f"API call failed, URL: {api_url}")
-
-        return False
-
-
-################################################
-############# END CHARGER API CALL #############
-################################################
-
 
 ############################################
 ############# SAVE DATA TO CSV #############
@@ -120,7 +89,16 @@ data_folder_path = config["AppSettings"]["FileFolder"]
 csv_file_name = data_folder_path + "charging_data.csv"
 
 
-def save_to_csv(data, state):
+def save_to_csv(data, state: str) -> None:
+    """
+    Saves data to a CSV file. Also takes care of creating a directory and the CSV file if necessary.
+
+    Args:
+        data: The data that will be saved to a CSV file
+        state: The state of the charging controller - 'connected' or 'disconnected'
+    Returns:
+        None
+    """
     global record_id
 
     # Check if folder for data DOESN'T exists
@@ -242,7 +220,7 @@ def save_to_csv(data, state):
                     csv_file.close()
 
                 logging.info(
-                    f"Data was successfully added to the CSV file, id of the charging session: {edit_row['id']}"
+                    f"Data was successfully added to the CSV file, ID of the charging session: {edit_row['id']}"
                 )
 
 
@@ -261,14 +239,20 @@ from utils import (
     get_last_known_state,
     set_last_known_state,
     save_to_emm,
+    send_request,
+    get_charging_point,
 )
+
+import requests
+
+# REST API settings
+api_host = config["RestApi"]["Host"]
+api_port = config["RestApi"]["Port"]
 
 
 # Function that is triggered on MQTT callback from the charger
 def on_vehicle_status_changed(client, userdata, message):
     global record_id
-
-    config = load_config()
 
     emm_api_host = config["EmmSettings"]["Host"]
     emm_api_key = config["EmmSettings"]["ApiKey"]
@@ -302,30 +286,36 @@ def on_vehicle_status_changed(client, userdata, message):
     ########################################
 
     # Get the starting energy data from API
-    energy_url = f"charging-controllers/{device_uid}/data?param_list=energy"
-    energy_data = call_charger_api(energy_url)
+    energy_url = f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{device_uid}/data?param_list=energy"
+    energy_data = send_request(url=energy_url, method="GET")
+    # If we couldn't get the data end the function
+    if energy_data is None:
+        return None
 
     # Get the charging point data from API
-    charging_point_url = "charging-points"
-    charging_point_data = call_charger_api(charging_point_url)
+    charging_point_url = f"http://{api_host}:{api_port}/api/v1.0/charging-points"
+    charging_point_data = send_request(url=charging_point_url, method="GET")
+    # If we couldn't get the data end the function
+    if charging_point_data is None:
+        return None
 
     # Set the valirables for charging point data
-    charging_point_id = ""
-    charging_point_name = ""
+    charging_point_id, charging_point_name = get_charging_point(
+        device_uid, charging_point_url
+    )
 
-    # Loop over the charging points and their data
-    for index, data in charging_point_data["charging_points"].items():
-        # Check if the device_uid matches current device_uid variable
-        if data["charging_controller_device_uid"] == device_uid:
-            charging_point_id = data["id"]
-            charging_point_name = data["charging_point_name"]
-
-    point_config_url = f"charging-points/{charging_point_id}/config"
-    point_config_data = call_charger_api(point_config_url)
+    point_config_url = f"http://{api_host}:{api_port}/api/v1.0/charging-points/{charging_point_id}/config"
+    point_config_data = send_request(url=point_config_url, method="GET")
+    # If we couldn't get the data end the function
+    if point_config_data is None:
+        return None
 
     # Get the RFID data from API
-    rfid_url = f"charging-controllers/{point_config_data['rfid_reader_device_uid']}/data?param_list=rfid"
-    rfid_data = call_charger_api(rfid_url)
+    rfid_url = f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{point_config_data['rfid_reader_device_uid']}/data?param_list=rfid"
+    rfid_data = send_request(url=rfid_url, method="GET")
+    # If we couldn't get the data end the function
+    if rfid_data is None:
+        return None
 
     ############################################
     ############# END GET API DATA #############
@@ -343,69 +333,61 @@ def on_vehicle_status_changed(client, userdata, message):
         print(f"[{now}] EV connected! deviceUid: {device_uid}")
         logging.info(f"EV connected to deviceUid: {device_uid}")
 
-        # If the API calls were successful
-        if energy_data and rfid_data != False:
+        # Get the time difference between RFID timestamp and start timestamp of the charging session
+        if rfid_data["rfid"]["timestamp"] != "":
+            rfid_difference = abs(
+                datetime.fromisoformat(rfid_data["rfid"]["timestamp"])
+                - datetime.fromisoformat(energy_data["energy"]["timestamp"])
+            )
 
-            # Get the time difference between RFID timestamp and start timestamp of the charging session
-            if rfid_data["rfid"]["timestamp"] != "":
-                rfid_difference = abs(
-                    datetime.fromisoformat(rfid_data["rfid"]["timestamp"])
-                    - datetime.fromisoformat(energy_data["energy"]["timestamp"])
-                )
-
-                # Check if RFID timestamp is within 60 seconds of the start of the charging session
-                if rfid_difference > timedelta(seconds=60):
-                    rfid_data["rfid"]["tag"] = ""
-                    rfid_data["rfid"]["timestamp"] = ""
-
-            # If data rfidTimestamp is empty set to RFID data to empty
-            else:
+            # Check if RFID timestamp is within 60 seconds of the start of the charging session
+            if rfid_difference > timedelta(seconds=60):
                 rfid_data["rfid"]["tag"] = ""
                 rfid_data["rfid"]["timestamp"] = ""
 
-            # Get the last known state of the device
-            last_known_state = get_last_known_state(device_uid, config)
-
-            # If the state file doesn't exist or last known state is 'disconnected'
-            if last_known_state is False or last_known_state == "disconnected":
-
-                if os.path.isfile(csv_file_name):
-                    # Get the current highest id of charging session
-                    highest_id = get_highest_id(csv_file_name)
-                    record_id = highest_id + 1
-
-                # Collect all the data from API calls in a dictionary
-                data = {
-                    "id": record_id,
-                    "deviceUid": device_uid,
-                    "chargingPointName": charging_point_name,
-                    "rfidTag": rfid_data["rfid"]["tag"],
-                    "rfidTimestamp": rfid_data["rfid"]["timestamp"],
-                    "startRealPowerWh": energy_data["energy"]["energy_real_power"][
-                        "value"
-                    ],
-                    "endRealPowerWh": None,
-                    "consumptionWh": None,
-                    "startTimestamp": energy_data["energy"]["timestamp"],
-                    "endTimestamp": None,
-                    "duration": None,
-                }
-
-                # Save the data to CSV
-                save_to_csv(data, "connected")
-
-                # If EMM API is configured also save to EMM web app
-                if emm_api_host != "" and emm_api_key != "" and emm_api_url != "":
-                    save_to_emm(data, emm_api_url, emm_api_key)
-
-                # Set the last known state to 'connected'
-                set_last_known_state(device_uid, "connected", config)
-                logging.info(
-                    f"Changing the last known state to 'connected' deviceUid: {device_uid}"
-                )
-
+        # If data rfidTimestamp is empty set to RFID data to empty
         else:
-            logging.error(f"API calls were unsuccessful, exiting")
+            rfid_data["rfid"]["tag"] = ""
+            rfid_data["rfid"]["timestamp"] = ""
+
+        # Get the last known state of the device
+        last_known_state = get_last_known_state(device_uid, config)
+
+        # If the state file doesn't exist or last known state is 'disconnected'
+        if last_known_state is False or last_known_state == "disconnected":
+            if os.path.isfile(csv_file_name):
+                # Get the current highest id of charging session
+                highest_id = get_highest_id(csv_file_name)
+                record_id = highest_id + 1
+
+            # Collect all the data from API calls in a dictionary
+            data = {
+                "id": record_id,
+                "deviceUid": device_uid,
+                "chargingPointName": charging_point_name,
+                "rfidTag": rfid_data["rfid"]["tag"],
+                "rfidTimestamp": rfid_data["rfid"]["timestamp"],
+                "startRealPowerWh": energy_data["energy"]["energy_real_power"]["value"],
+                "endRealPowerWh": None,
+                "consumptionWh": None,
+                "startTimestamp": energy_data["energy"]["timestamp"],
+                "endTimestamp": None,
+                "duration": None,
+            }
+
+            # Save the data to CSV
+            save_to_csv(data, "connected")
+
+            # If EMM API is configured also save to EMM web app
+            if emm_api_host != "" and emm_api_key != "" and emm_api_url != "":
+                save_to_emm(data, emm_api_url, emm_api_key)
+
+            # Set the last known state to 'connected'
+            set_last_known_state(device_uid, "connected", config)
+
+            logging.info(
+                f"Changing the last known state to 'connected' deviceUid: {device_uid}"
+            )
 
     # If vehicle is NOT connected/disconnected
     else:
@@ -414,9 +396,6 @@ def on_vehicle_status_changed(client, userdata, message):
 
         # Set the last known state to 'disconnected'
         set_last_known_state(device_uid, "disconnected", config)
-        logging.info(
-            f"Changing the last known state to 'disconnected' deviceUid: {device_uid}"
-        )
 
         # If the API calls were successful
         if energy_data and rfid_data != False:

@@ -28,6 +28,7 @@ from utils import set_logging
 import logging
 
 set_logging(config)
+log_prefix = "[collect_data_json.py]:"
 
 ###########################################
 ############# END SET LOGGING #############
@@ -58,12 +59,16 @@ def call_charger_api(api_call):
             return response.json()
 
         else:
-            logging.error(f"COLLECT DATA: API call failed, URL: {api_url}")
+            logging.error(
+                f"{log_prefix} COLLECT DATA: API call failed, URL: {api_url}, {response.reason}"
+            )
 
             return False
 
-    except:
-        logging.error(f"COLLECT DATA: API call failed, URL: {api_url}")
+    except Exception as e:
+        logging.error(
+            f"{log_prefix} COLLECT DATA: API call failed, URL: {api_url}, {e}"
+        )
 
         return False
 
@@ -212,7 +217,7 @@ def controller_data_to_json():
     emm_api_key = config["EmmSettings"]["ApiKey"]
     emm_api_url = f"{emm_api_host}/api/public/controller-data"
 
-    # Set threading timer
+    # Run this function every 5 seconds, start the timer
     threading.Timer(5, controller_data_to_json).start()
 
     output_data = collect_controller_data()
@@ -239,5 +244,6 @@ def controller_data_to_json():
 ################################################################
 ############# END COLLECT CONTROLLER DATA FROM API #############
 ################################################################
+
 
 controller_data_to_json()
