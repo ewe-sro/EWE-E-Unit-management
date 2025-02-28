@@ -28,168 +28,150 @@ from utils import set_logging
 import logging
 
 set_logging(config)
-log_prefix = "[collect_data_json.py]:"
 
 ###########################################
 ############# END SET LOGGING #############
 ###########################################
 
 
-############################################
-############# CHARGER API CALL #############
-############################################
-
-import requests
-
 # REST API settings
-api_address = config["RestApi"]["Host"]
+api_host = config["RestApi"]["Host"]
 api_port = config["RestApi"]["Port"]
-
-
-def call_charger_api(api_call):
-    # Make a REST API call to get the current energy data
-    api_url = f"http://{api_address}:{api_port}/api/v1.0/{api_call}"
-
-    try:
-        response = requests.get(api_url)
-
-        # If the API response is successful
-        if response.status_code == 200:
-            # Parse the response JSON data
-            return response.json()
-
-        else:
-            logging.error(
-                f"{log_prefix} COLLECT DATA: API call failed, URL: {api_url}, {response.reason}"
-            )
-
-            return False
-
-    except Exception as e:
-        logging.error(
-            f"{log_prefix} COLLECT DATA: API call failed, URL: {api_url}, {e}"
-        )
-
-        return False
-
-
-################################################
-############# END CHARGER API CALL #############
-################################################
 
 
 ###################################################
 ############# COLLECT CONTROLLER DATA #############
 ###################################################
 
+from typing import Dict
+from utils import send_request, get_charging_point
 
 def collect_controller_data():
     # Create a dictionary object for output data
     output_data = {}
 
-    # Get the controller data from API
-    controller_url = "charging-controllers"
-    controller_data = call_charger_api(controller_url)
+    # Get the chargers' controllers from the internal API
+    controllers_response = send_request(
+        url=f"http://{api_host}:{api_port}/api/v1.0/charging-controllers",
+        method="GET"
+    )
 
-    # Check if API call was successful
-    if controller_data != False:
-        # Loop over the controller data
-        for controller in controller_data:
+    # Check if the controllers request was successful, if not exit the function
+    if controllers_response is None:
+        return None
+    
+    # Get the controllers from the JSON of the response
+    controllers: Dict[str, Dict[str, str]] = controllers_response.json()
 
-            # Get the charging point name from API
-            charging_point_url = "charging-points"
-            charging_point_data = call_charger_api(charging_point_url)
-            charging_point_name = ""
+    # Loop over the controller data
+    for controller in controllers:
 
-            # Loop over the charging point data and find the correspoding controller
-            for point in charging_point_data["charging_points"]:
-                # If device_uid is the same as the current controller_uid
-                if (
-                    charging_point_data["charging_points"][point][
-                        "charging_controller_device_uid"
-                    ]
-                    == controller
-                ):
-                    charging_point_id = charging_point_data["charging_points"][point][
-                        "id"
-                    ]
-                    charging_point_name = charging_point_data["charging_points"][point][
-                        "charging_point_name"
-                    ]
+        # Get the charging point name from API
+        charging_point_url = f"http://{api_host}:{api_port}/api/v1.0/charging-points"
+        
+        # Set the variables for charging point data
+        charging_point_id, charging_point_name = get_charging_point(controller, charging_point_url)
 
-            # Add the controller data to output dictionary
-            output_data[controller] = {
-                "device_name": controller_data[controller]["device_name"],
-                "controller_uid": controller_data[controller]["device_uid"],
-                "firmware_version": controller_data[controller]["firmware_version"],
-                "hardware_version": controller_data[controller]["hardware_version"],
-                "parent_device_uid": controller_data[controller]["parent_device_uid"],
-                "position": controller_data[controller]["position"],
-                "charging_point_id": charging_point_id,
-                "charging_point_name": charging_point_name,
-            }
+        # Add the controller data to output dictionary
+        output_data[controller] = {
+            "device_name": controllers[controller]["device_name"],
+            "controller_uid": controllers[controller]["device_uid"],
+            "firmware_version": controllers[controller]["firmware_version"],
+            "hardware_version": controllers[controller]["hardware_version"],
+            "parent_device_uid": controllers[controller]["parent_device_uid"],
+            "position": controllers[controller]["position"],
+            "charging_point_id": charging_point_id,
+            "charging_point_name": charging_point_name,
+        }
 
-            ###################
-            ### ENERGY DATA ###
-            ###################
+        ###################
+        ### ENERGY DATA ###
+        ###################
 
-            # Get the energy data from API
-            energy_url = f"charging-controllers/{controller}/data?param_list=energy"
-            energy_data = call_charger_api(energy_url)
+        # Get the data the internal API
+        energy_response = send_request(
+            url=f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{controller}/data?param_list=energy",
+            method="GET"
+        )
 
-            ######################
-            ### CHARGING STATE ###
-            ######################
+        # Check if the request was successful, if not exit the function
+        if energy_response is None:
+            return None
+        
+        # Get the data from the JSON of the response
+        energy = energy_response.json()
 
-            # Vehicle connected states
-            connected_vehicle_state = ["B1", "B2", "C1", "C2", "D1", "D2"]
 
-            # Get the connected state from API
-            connected_state_url = (
-                f"charging-controllers/{controller}/data?param_list=iec_61851_state"
-            )
-            connected_state_data = call_charger_api(connected_state_url)
+        ######################
+        ### CHARGING STATE ###
+        ######################
 
-            # Check if vehicle is connected to the charger
-            if connected_state_data["iec_61851_state"] in connected_vehicle_state:
-                connected_state = "connected"
-            else:
-                connected_state = "disconnected"
+        # Vehicle connected states
+        connected_vehicle_state = ["B1", "B2", "C1", "C2", "D1", "D2"]
 
-            ######################
-            ### CONNECTED TIME ###
-            ######################
+        # Get the connected state the internal API
+        connected_state_response = send_request(
+            url=f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{controller}/data?param_list=iec_61851_state",
+            method="GET"
+        )
+        
+        # Check if the request was successful, if not exit the function
+        if connected_state_response is None:
+            return None
+        
+        # Get the data from the JSON of the response
+        connected_state_data = connected_state_response.json()
 
-            # Get the connected state from API
-            connected_time_url = (
-                f"charging-controllers/{controller}/data?param_list=connected_time_sec"
-            )
-            connected_time_data = call_charger_api(connected_time_url)
+        # Check if vehicle is connected to the charger
+        if connected_state_data["iec_61851_state"] in connected_vehicle_state:
+            connected_state = "connected"
 
-            ###################
-            ### CHARGE TIME ###
-            ###################
+        else:
+            connected_state = "disconnected"
 
-            # Get the connected state from API
-            charge_time_url = (
-                f"charging-controllers/{controller}/data?param_list=charge_time_sec"
-            )
-            charge_time_data = call_charger_api(charge_time_url)
 
-            # Add the charging data output dictionary
-            output_data[controller]["charging_data"] = energy_data["energy"]
-            output_data[controller]["charging_data"]["iec_61851_state"] = (
-                connected_state_data["iec_61851_state"]
-            )
-            output_data[controller]["charging_data"][
-                "connected_state"
-            ] = connected_state
-            output_data[controller]["charging_data"]["connected_time_sec"] = (
-                connected_time_data["connected_time_sec"]
-            )
-            output_data[controller]["charging_data"]["charge_time_sec"] = (
-                charge_time_data["charge_time_sec"]
-            )
+        ######################
+        ### CONNECTED TIME ###
+        ######################
+
+        # Get the connected time the internal API
+        connected_time_response = send_request(
+            url=f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{controller}/data?param_list=connected_time_sec",
+            method="GET"
+        )
+
+        # Check if the request was successful, if not exit the function
+        if connected_time_response is None:
+            return None
+        
+        # Get the data from the JSON of the response
+        connected_time = connected_time_response.json()
+
+
+        ###################
+        ### CHARGE TIME ###
+        ###################
+
+        # Get the connected time the internal API
+        charge_time_response = send_request(
+            url=f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{controller}/data?param_list=charge_time_sec",
+            method="GET"
+        )
+
+        # Check if the request was successful, if not exit the function
+        if charge_time_response is None:
+            return None
+        
+        # Get the data from the JSON of the response
+        charge_time = charge_time_response.json()
+
+
+        # Add the charging data output dictionary
+        output_data[controller]["charging_data"] = energy["energy"]
+        output_data[controller]["charging_data"]["iec_61851_state"] = connected_state_data["iec_61851_state"]
+        output_data[controller]["charging_data"]["connected_state"] = connected_state
+        output_data[controller]["charging_data"]["connected_time_sec"] = connected_time["connected_time_sec"]
+        output_data[controller]["charging_data"]["charge_time_sec"] = charge_time["charge_time_sec"]
 
     return output_data
 
@@ -207,16 +189,15 @@ import os
 import json
 import threading
 
-from utils import save_to_emm
-
+# EMM API settings
+emm_api_host = config["EmmSettings"]["Host"]
+emm_api_key = config["EmmSettings"]["ApiKey"]
+emm_headers = {
+    "Content-Type": "application/json",
+    "Authorization": f"Bearer {emm_api_key}",
+}
 
 def controller_data_to_json():
-    config = load_config()
-
-    emm_api_host = config["EmmSettings"]["Host"]
-    emm_api_key = config["EmmSettings"]["ApiKey"]
-    emm_api_url = f"{emm_api_host}/api/public/controller-data"
-
     # Run this function every 5 seconds, start the timer
     threading.Timer(5, controller_data_to_json).start()
 
@@ -233,12 +214,17 @@ def controller_data_to_json():
     json_file_name = data_folder_path + "controller_data.json"
 
     # Save the collected data to JSON file
-    with open(json_file_name, "w") as json_file:
+    with open(json_file_name, "w", encoding="utf-8") as json_file:
         json.dump(output_data, json_file)
 
     # If EMM API is configured also save to EMM web app
-    if emm_api_host != "" and emm_api_key != "" and emm_api_url != "":
-        save_to_emm(output_data, emm_api_url, emm_api_key)
+    if emm_api_host != "" and emm_api_key != "":
+        send_request(
+            url=f"{emm_api_host}/api/public/controller-data",
+            method="POST",
+            headers=emm_headers,
+            data=json.dumps(output_data)
+        )
 
 
 ################################################################

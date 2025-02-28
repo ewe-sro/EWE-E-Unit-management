@@ -10,8 +10,8 @@ now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 import configparser
 
-config_path = "/data/user-app/charging_data/charging_data.conf"
-#config_path = "./charging_data.conf"
+# config_path = "/data/user-app/charging_data/charging_data.conf"
+config_path = "./charging_data.conf"
 
 
 def load_config() -> Optional[Dict[str, str]]:
@@ -252,15 +252,6 @@ import csv
 
 
 def get_highest_id(csv_file):
-    """
-    Gets the highest integer from a CSV file in column ID.
-
-    Args:
-        csv_file: The path to the CSV file, from which we'll get the highest ID
-
-    Returns:
-        highest_id = either 0 or the highest found integer in ID column
-    """
     # Open the existing CSV
     open_csv = open(csv_file, "r")
 
@@ -294,7 +285,6 @@ def get_highest_id(csv_file):
 ############################################
 
 import requests
-Response = requests.models.Response
 
 
 def send_request(
@@ -305,7 +295,7 @@ def send_request(
     data: Optional[Dict[str, Any]] = None,
     json: Optional[Dict[str, Any]] = None,
     timeout: int = 10,
-) -> Optional[Response]:
+) -> Optional[Dict[str, Any]]:
     """
     Make an HTTP request with error logging. Continues execution on error.
 
@@ -318,7 +308,7 @@ def send_request(
         json: Optional dictionary of JSON data
         timeout: Request timeout in seconds
     Returns:
-        The response if successful, None if failed
+        Dict containing the response data if successful, None if failed
     """
 
     # Validate the supplied method
@@ -350,8 +340,13 @@ def send_request(
             )
             return None
 
-        # Return the response
-        return response
+        # Try to return JSON response
+        try:
+            return response.json()
+
+        except ValueError:
+            # Return text response if not JSON
+            return response.text
 
     except requests.exceptions.ConnectionError:
         logging.error(
@@ -372,6 +367,31 @@ def send_request(
 ############# END SEND API REQUEST #############
 ################################################
 
+
+############################################
+############# SAVE DATA TO EMM #############
+############################################
+
+import json
+
+
+def save_to_emm(data, api_url, api_key):
+    try:
+        # Request headers
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        requests.post(api_url, data=json.dumps(data), headers=headers)
+
+    except Exception as e:
+        logging.error(f"API call to EMM failed, URL: {api_url}, {e}")
+
+
+################################################
+############# END SAVE DATA TO EMM #############
+################################################
 
 
 ###############################################
@@ -399,14 +419,11 @@ def get_charging_point(controller_id: str, api_url: str):
     charging_point_name: Optional[str] = None
 
     # Send an API request to the provided URL
-    charging_point_response = send_request(url=api_url, method="GET")
+    charging_point_data = send_request(url=api_url, method="GET")
 
     # If the API response is successful
-    if charging_point_response is None:
+    if charging_point_data is None:
         return charging_point_id, charging_point_name
-    
-    # Get the JSON data from the response
-    charging_point_data = charging_point_response.json()
 
     # Loop over the charging points and their data
     for index, data in charging_point_data["charging_points"].items():

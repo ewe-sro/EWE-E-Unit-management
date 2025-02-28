@@ -1,8 +1,8 @@
 #######################################
 # VERSION 0.1
-# DATE 13/01/2025
+# DATE 13/01/2024
 #
-# @ 2025 EWE s.r.o.
+# @ 2024 EWE s.r.o.
 # WWW: mobility.ewe.cz
 #######################################
 
@@ -40,7 +40,7 @@ set_logging(config)
 api_host = config["RestApi"]["Host"]
 api_port = config["RestApi"]["Port"]
 
-# EMM API settings
+# Set the API call headers
 emm_api_host = config["EmmSettings"]["Host"]
 emm_api_key = config["EmmSettings"]["ApiKey"]
 emm_headers = {
@@ -53,7 +53,7 @@ emm_headers = {
 ############# APPLY EMM SETTINGS #############
 ##############################################
 
-from typing import Dict
+from typing import Dict, Optional
 from utils import send_request
 
 
@@ -62,31 +62,26 @@ def apply_emm_settings() -> None:
     Get charging controller settings from EMM API endpoint and apply them via the internal API.
     """
     # Get the chargers' controllers from the internal API
-    controllers_response = send_request(
+    controllers: Optional[Dict[str, Dict[str, str]]] = send_request(
         url=f"http://{api_host}:{api_port}/api/v1.0/charging-controllers",
-        method="GET"
+        method="GET",
+        headers=emm_headers,
     )
 
-    # Check if the controllers request was successful, if not exit the function
-    if controllers_response is None:
+    # Check if any controllers were found, if not exit the function
+    if controllers is None:
         return None
-    
-    # Get the controllers from the JSON of the response
-    controllers: Dict[str, Dict[str, str]] = controllers_response.json()
 
     # Call the EMM API and get the settings data
-    controller_settings_response = send_request(
+    controller_settings: Optional[Dict[str, Dict[str, str]]] = send_request(
         url=f"{emm_api_host}/api/public/controller-settings",
         method="GET",
-        headers=emm_headers
+        headers=emm_headers,
     )
 
     # If we couldn't get the controller settings from EMM exit the function
-    if controller_settings_response is None:
+    if controller_settings is None:
         return None
-    
-    # Get the controller settings from the JSON of the response
-    controller_settings: Dict[str, Dict[str, str]] = controller_settings_response.json()
 
     # Loop over the controller settings we got from EMM
     for controller in controller_settings:
@@ -105,11 +100,19 @@ def apply_emm_settings() -> None:
 
         # Get the settings data for later use in the controller API request
         settings_data = {
-            "charging_point_name": controller_settings[controller]["settings"]["chargingPointName"],
+            "charging_point_name": controller_settings[controller]["settings"][
+                "chargingPointName"
+            ],
             "location": controller_settings[controller]["settings"]["location"],
-            "minimum_charge_current": controller_settings[controller]["settings"]["minimumChargeCurrent"],
-            "maximum_charge_current": controller_settings[controller]["settings"]["maximumChargeCurrent"],
-            "fallback_charge_current": controller_settings[controller]["settings"]["fallbackChargeCurrent"],
+            "minimum_charge_current": controller_settings[controller]["settings"][
+                "minimumChargeCurrent"
+            ],
+            "maximum_charge_current": controller_settings[controller]["settings"][
+                "maximumChargeCurrent"
+            ],
+            "fallback_charge_current": controller_settings[controller]["settings"][
+                "fallbackChargeCurrent"
+            ],
         }
         # Filter values which are None from the settings dictionary
         settings_data = {k: v for k, v in settings_data.items() if v is not None}
@@ -122,9 +125,9 @@ def apply_emm_settings() -> None:
         api_url = f"http://{api_host}:{api_port}/api/v1.0/charging-points/{charging_point_id}/config"
 
         # Change the controller settings via the internal API
-        config_response = send_request(url=api_url, method="PUT", json=settings_data)
+        response = send_request(url=api_url, method="PUT", json=settings_data)
 
-        if config_response is None:
+        if response is None:
             return
 
         # Call the EMM API with POST request to let the app know
@@ -132,7 +135,7 @@ def apply_emm_settings() -> None:
         send_request(
             url=f"{emm_api_host}/api/public/controller-settings",
             method="POST",
-            headers=emm_headers
+            headers=emm_headers,
         )
 
 
@@ -153,18 +156,15 @@ def sync_emm_settings() -> None:
     Get the current charging point settings from the internal API and send them to EMM API endpoint.
     """
     # Get the chargers' controllers from the internal API
-    controllers_response = send_request(
+    controllers: Optional[Dict[str, Dict[str, str]]] = send_request(
         url=f"http://{api_host}:{api_port}/api/v1.0/charging-controllers",
         method="GET",
         headers=emm_headers,
     )
 
     # Check if any controllers were found, if not exit the function
-    if controllers_response is None:
+    if controllers is None:
         return None
-    
-    # Get the controllers from the JSON of the response
-    controllers: Dict[str, Dict[str, str]] = controllers_response.json()
 
     # Loop over the controller settings we got from EMM
     for controller in controllers:
@@ -179,16 +179,13 @@ def sync_emm_settings() -> None:
             return
 
         # Get the charging point config
-        settings_data_response = send_request(
+        settings_data = send_request(
             url=f"http://{api_host}:{api_port}/api/v1.0/charging-points/{charging_point_id}/config",
             method="GET",
         )
 
-        if settings_data_response is None:
+        if settings_data is None:
             return None
-        
-        # Get the controllers from the JSON of the response
-        settings_data: Dict[str, Dict[str, str]] = settings_data_response.json()
 
         # Send a PUT request to EMM to save the current settings
         send_request(
