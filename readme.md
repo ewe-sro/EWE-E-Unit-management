@@ -7,7 +7,7 @@ Python skript **_save_charging_data.py_** čeká na připojení/odpojení automo
 Pro nainstalování skriptu je potřeba nahrát tyto soubory na kontroler do složky **_/data/user-app/charging_data_**
 1. **_save_charging_data.py_** - skript s hlavní logikou pro sbírání, ukládání a odesílaní nabíjecích dat
 2. **_collect_data_json.py_** - skript, který získá data kontroleru z API a uloží je do JSON souboru
-3. **_collect_data_json.py_** - skript, který synchronizuje nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
+3. **_sync_settings.py_** - skript, který synchronizuje nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
 4. **_utils.py_** - pomocné funkce, které jsou ve skriptu použity
 5. **_charging_data.conf_** - konfigurační soubor
 
