@@ -8,8 +8,9 @@ Pro nainstalování skriptu je potřeba nahrát tyto soubory na kontroler do slo
 1. **_save_charging_data.py_** - skript s hlavní logikou pro sbírání, ukládání a odesílaní nabíjecích dat
 2. **_collect_data_json.py_** - skript, který získá data kontroleru z API a uloží je do JSON souboru
 3. **_sync_settings.py_** - skript, který synchronizuje nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
-4. **_utils.py_** - pomocné funkce, které jsou ve skriptu použity
-5. **_charging_data.conf_** - konfigurační soubor
+4. **_update.py_** - skript, který aktualizuje skripty z tohoto repozitáře na nějnovější verzi
+5. **_utils.py_** - pomocné funkce, které jsou ve skriptu použity
+6. **_charging_data_example.conf_** - ukázka konfiguračního souboru
 
 ### Nastavení automatického spouštění skriptu při startu kontroleru
 
