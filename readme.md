@@ -8,18 +8,18 @@ Python skripty v tom repozitáři se primárně starají za propojení nabíjec�
 3. **_sync_settings.py_** - skript, který synchronizuje nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
 4. **_update.py_** - skript, který aktualizuje skripty z tohoto repozitáře na nějnovější verzi
 5. **_utils.py_** - pomocné funkce, které jsou ve skriptech použity
-6. **_charging_data_example.conf_** - ukázka konfiguračního souboru - je potřeba přejmenovat na _charging_data.conf_
+6. **_charging_data_example.conf_** - ukázka konfiguračního souboru - je potřeba vyplnit a přejmenovat na _charging_data.conf_
 
 ## Instalace skriptů pomocí **_update.py_**
 
 K instalaci skriptů je možné použít skript **_update.py_**. Je potřeba nakopírovat tyto soubory na kontroler do složky **_/data/user-app/charging_data_**:
 1. **_update.py_**
 2. **_utils.py_**
-3. **_charging_data_example.conf_** - je potřeba přejmenovat na _charging_data.conf_
+3. **_charging_data_example.conf_** - je potřeba vyplnit a přejmenovat na _charging_data.conf_
 
-A poté spustit skript update.py pomocí tohoto příkazu
+A poté spustit skript **_update.py_** pomocí tohoto příkazu
 ```
-/usr/bin/python3 /data/user-app/charging_data/save_charging_data.py
+/usr/bin/python3 /data/user-app/charging_data/update.py
 ```
 
 ## Manuální instalace skriptů
