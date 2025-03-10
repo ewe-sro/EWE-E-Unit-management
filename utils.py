@@ -353,14 +353,14 @@ def send_request(
         # Return the response
         return response
 
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as err:
         logging.error(
-            f"Failed to connect to the server. Please check your internet connection. URL: {url}"
+            f"Failed to connect to the server. Please check your internet connection: {str(err)}. URL: {url}"
         )
         return None
 
     except requests.exceptions.Timeout:
-        logging.error(f"Request timed out after {timeout} seconds. URL: {url}")
+        logging.error(f"Request timed out after {timeout} seconds: {str(err)}. URL: {url}")
         return None
 
     except requests.exceptions.RequestException as err:
