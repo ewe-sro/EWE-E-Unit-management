@@ -1,15 +1,34 @@
 # EWE - Charging data
 
-Python skript **_save_charging_data.py_** čeká na připojení/odpojení automobilu a následně zpracuje aktuální nabíjecí data, uloží je do CSV souboru a případně odešle do EMM aplikace.
+Python skripty v tom repozitáři se primárně starají za propojení nabíjecí stanice s webovou aplikací EMM.
 
-## Instalace skriptu
-
-Pro nainstalování skriptu je potřeba nahrát tyto soubory na kontroler do složky **_/data/user-app/charging_data_**
-1. **_save_charging_data.py_** - skript s hlavní logikou pro sbírání, ukládání a odesílaní nabíjecích dat
-2. **_collect_data_json.py_** - skript, který získá data kontroleru z API a uloží je do JSON souboru
+## Popis souborů
+1. **_save_charging_data.py_** - skript s hlavní logikou pro sbírání, ukládání a odesílaní nabíjecích relací
+2. **_collect_data_json.py_** - skript, který získá data kontroleru z API a uloží je do JSON souboru a případně odešle do EMM
 3. **_sync_settings.py_** - skript, který synchronizuje nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
-4. **_utils.py_** - pomocné funkce, které jsou ve skriptu použity
-5. **_charging_data.conf_** - konfigurační soubor
+4. **_update.py_** - skript, který aktualizuje skripty z tohoto repozitáře na nějnovější verzi
+5. **_utils.py_** - pomocné funkce, které jsou ve skriptech použity
+6. **_charging_data_example.conf_** - ukázka konfiguračního souboru - je potřeba vyplnit a přejmenovat na _charging_data.conf_
+
+## Instalace skriptů pomocí **_update.py_**
+
+K instalaci skriptů je možné použít skript **_update.py_**. Je potřeba nakopírovat tyto soubory na kontroler do složky **_/data/user-app/charging_data_**:
+1. **_update.py_**
+2. **_utils.py_**
+3. **_charging_data_example.conf_** - je potřeba vyplnit a přejmenovat na _charging_data.conf_
+
+A poté spustit skript **_update.py_** pomocí tohoto příkazu
+```
+/usr/bin/python3 /data/user-app/charging_data/update.py
+```
+
+## Manuální instalace skriptů
+
+Pro nainstalování skriptu je potřeba nahrát všechny soubory na kontroler do složky **_/data/user-app/charging_data_**.
+
+## Skript pro ukládání nabíjecích relaci
+
+Python skript **_save_charging_data.py_** čeká na připojení/odpojení automobilu a následně zpracuje aktuální nabíjecí data, uloží je do CSV souboru a případně odešle do EMM aplikace (pokud je nastaven v kofiguračním souboru API klíč).
 
 ### Nastavení automatického spouštění skriptu při startu kontroleru
 
@@ -44,7 +63,7 @@ Následně získá aktuální nastavení nabíjecího bodu a tato nastavení ode
 /usr/bin/python3 /data/user-app/charging_data/sync_settings.py &
 ```
 
-### Spuštění skriptů bez nutnosti restartu
+### Manuální spuštění skriptů bez nutnosti restartu
 
 ```
 nohup /usr/bin/python3 /data/user-app/charging_data/save_charging_data.py &
