@@ -221,6 +221,82 @@ def start_script_automatically(path: str):
 
 
 
+#################################################
+############# SETUP UPDATE CRON JOB #############
+#################################################
+
+import re
+
+def is_valid_cron(cron_expression: str) -> bool:
+    """Validates a cron expression format using regex."""
+    
+    # Regex pattern for each field (minute, hour, day, month, weekday)
+    cron_pattern = (
+        r"^([0-5]?\d|\*|(\d+[-/]\d+)|(\d+(,\d+)*))\s"  # Minutes (0-59)
+        r"([0-2]?\d|\*|(\d+[-/]\d+)|(\d+(,\d+)*))\s"  # Hours (0-23)
+        r"([1-9]|[12]\d|3[01]|\*|(\d+[-/]\d+)|(\d+(,\d+)*))\s"  # Day of Month (1-31)
+        r"([1-9]|1[0-2]|\*|(\d+[-/]\d+)|(\d+(,\d+)*))\s"  # Month (1-12)
+        r"([0-6]|\*|(\d+[-/]\d+)|(\d+(,\d+)*))$"  # Day of Week (0-6, Sunday=0)
+    )
+
+    return bool(re.match(cron_pattern, cron_expression.strip()))
+
+def setup_cron_job(cron_expression: str, path: str):
+    """
+    Checks if a cron job exists with the given command
+    and create it if not found using native Linux commands.
+
+    Args:
+        cron_expression: Cron expression for scheduling the cron job
+        path: The full filesystem path of the script that should be started with cron job
+    Returns:
+        True if successfully processed, None if failed
+    """
+
+    if not is_valid_cron(cron_expression):
+        # If invalid cron expression was provided, log an erorr and exit the function
+        logging.error(f"Invalid cron expression provided: {cron_expression}")
+
+        return None
+
+    # The cron job row to be added
+    cron_job = f"{cron_expression} {python_path} {path}"
+    
+    # Get the current crontab
+    try:
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=True)
+        cron_jobs = result.stdout
+    except subprocess.CalledProcessError:
+        cron_jobs = ""  # If crontab is empty, treat it as an empty string
+
+    # Check if the job already exists
+    if cron_job not in cron_jobs:
+        # Append the new job - handle empty crontab case
+        if cron_jobs:
+            new_cron_jobs = cron_jobs + f"\n{cron_job}\n"
+        else:
+            new_cron_jobs = f"{cron_job}\n"
+
+        try:
+            # Write the updated crontab
+            subprocess.run(["crontab", "-"], input=new_cron_jobs, text=True, check=True)
+            logging.info(f"Cron job was created: {cron_job}")
+            return True
+        
+        except subprocess.CalledProcessError as err:
+            # If updating the crontab failed log the error and exit the function
+            logging.error(f"Failed to update crontab: {err}")
+
+            return None
+        
+    return True  # Cronjob already exists
+
+#####################################################
+############# END SETUP UPDATE CRON JOB #############
+#####################################################
+
+
+
 ###############################################
 ############# UPDATE SCRIPT FILES #############
 ###############################################
@@ -233,6 +309,8 @@ def update_scripts():
     Gets a list of Python scripts from EMM API endpoint and either updates existing file or saves the file.
     Also terminates any existing processes for the file and starts a new process.
     """
+    print("Getting a list of files to update")
+
     # Call the EMM API and get the script file names and where they should be saved
     scripts_response = send_request(
         url=f"{emm_api_host}/api/public/script",
@@ -248,6 +326,8 @@ def update_scripts():
     
     # Loop over the script names we got from the API
     for script_name in scripts:
+        print(f"Updating script file: {script_name}")
+
         # Call the EMM API and get the script file
         file_response = send_request(
             url=f"{emm_api_host}/api/public/script/{script_name}",
@@ -272,6 +352,10 @@ def update_scripts():
         if file_saved is None:
             continue
 
+        # Setup a cron job if necessary
+        if scripts[script_name]["cron"]["enabled"] is True:
+            setup_cron_job(scripts[script_name]["cron"]["expression"], file_path)
+
         # If the file shouldn't be started automatically, go to the next file
         if scripts[script_name]["persistent"] is False:
             continue
@@ -284,6 +368,7 @@ def update_scripts():
 
         # Start the script process for the newly update file
         start_script_process(file_path)
+
 
 ###################################################
 ############# END UPDATE SCRIPT FILES #############
