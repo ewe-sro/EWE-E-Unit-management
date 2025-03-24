@@ -209,7 +209,7 @@ def start_script_automatically(path: str):
             if content:
                 file.write("\n")
 
-            file.write(f"{python_path} {path}")
+            file.write(f"{python_path} {path} &")
 
         return True
 
