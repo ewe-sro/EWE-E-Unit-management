@@ -115,12 +115,12 @@ python_path = "/usr/bin/python3"
 
 def terminate_script_process(path: str):
     """
-    Start a script in a new process.
+    Terminate a script process.
 
     Args:
         path: The full filesystem path of the script that should be terminated
     Returns:
-        True if successfully processed, None if failed
+        None
     """
     process_name = f"{python_path} {path}"
 
