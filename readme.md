@@ -55,7 +55,7 @@ Stejně jako u předešlého skriptu je potřeba upravit soubor **_data/user-app
 
 ## Skript pro synchronizaci nastavení s EMM
 
-- **_save_charging_data.py_**
+- **_sync_settings.py_**
 
 Abychom mohli změnit nastavení vzdáleně pomocí webové aplikace EMM běží na nabíjecí stanici tento skript. Skript nejdříve získá nastavení z EMM, pokud nějaká existují, tato nastavení aplikuje.
 Následně získá aktuální nastavení nabíjecího bodu a tato nastavení odešle do EMM k uložení. Tento způsob nám dovoluje upravit nastavení jak z webové aplikace, tak z lokální administrace nabíjecí stanice a zároveň zůstanou data o nastavení v EMM konzistentní.
