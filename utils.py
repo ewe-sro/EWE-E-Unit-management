@@ -10,8 +10,8 @@ now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 import configparser
 
-config_path = "/data/user-app/charging_data/charging_data.conf"
-#config_path = "./charging_data.conf"
+#config_path = "/data/user-app/charging_data/charging_data.conf"
+config_path = "./charging_data.conf"
 
 
 def load_config() -> Optional[Dict[str, str]]:

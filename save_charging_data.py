@@ -1,6 +1,6 @@
 #######################################
 # VERSION 0.2
-# DATE 07/11/2024
+# DATE 19/09/2025
 #
 # @ 2024 EWE s.r.o.
 # WWW: mobility.ewe.cz
@@ -74,7 +74,6 @@ def on_connect(client, userdata, flags, rc):
 ###############################################
 ############# END MQTT CONNECTION #############
 ###############################################
-
 
 
 ############################################
@@ -240,7 +239,7 @@ from utils import (
     get_last_known_state,
     set_last_known_state,
     send_request,
-    get_charging_point
+    get_charging_point,
 )
 
 import json
@@ -295,19 +294,21 @@ def on_vehicle_status_changed(client, userdata, message):
     # If we couldn't get the data end the function
     if energy_response is None:
         return None
-    
+
     energy_data = energy_response.json()
 
     # Set the variables for charging point data
     charging_point_url = f"http://{api_host}:{api_port}/api/v1.0/charging-points"
-    charging_point_id, charging_point_name = get_charging_point(device_uid, charging_point_url)
+    charging_point_id, charging_point_name = get_charging_point(
+        device_uid, charging_point_url
+    )
 
     point_config_url = f"http://{api_host}:{api_port}/api/v1.0/charging-points/{charging_point_id}/config"
     point_config_response = send_request(url=point_config_url, method="GET")
     # If we couldn't get the data end the function
     if point_config_response is None:
         return None
-    
+
     point_config_data = point_config_response.json()
 
     # Get the RFID data from API
@@ -316,7 +317,7 @@ def on_vehicle_status_changed(client, userdata, message):
     # If we couldn't get the data end the function
     if rfid_response is None:
         return None
-    
+
     rfid_data = rfid_response.json()
 
     ############################################
@@ -337,7 +338,10 @@ def on_vehicle_status_changed(client, userdata, message):
 
         # Get the time difference between RFID timestamp and start timestamp of the charging session
         if rfid_data["rfid"]["timestamp"] != "":
-            rfid_difference = abs(datetime.fromisoformat(rfid_data["rfid"]["timestamp"]) - datetime.fromisoformat(energy_data["energy"]["timestamp"]))
+            rfid_difference = abs(
+                datetime.fromisoformat(rfid_data["rfid"]["timestamp"])
+                - datetime.fromisoformat(energy_data["energy"]["timestamp"])
+            )
 
             # Check if RFID timestamp is within 60 seconds of the start of the charging session
             if rfid_difference > timedelta(seconds=60):
@@ -383,13 +387,15 @@ def on_vehicle_status_changed(client, userdata, message):
                     url=f"{emm_api_host}/api/public/charging-session",
                     method="POST",
                     headers=emm_headers,
-                    data=json.dumps(data)
+                    data=json.dumps(data),
                 )
 
             # Set the last known state to 'connected'
             set_last_known_state(device_uid, "connected", config)
 
-            logging.info(f"Changing the last known state to 'connected' deviceUid: {device_uid}")
+            logging.info(
+                f"Changing the last known state to 'connected' deviceUid: {device_uid}"
+            )
 
     # If vehicle is NOT connected/disconnected
     else:
@@ -419,7 +425,7 @@ def on_vehicle_status_changed(client, userdata, message):
                     url=f"{emm_api_host}/api/public/charging-session",
                     method="POST",
                     headers=emm_headers,
-                    data=json.dumps(data)
+                    data=json.dumps(data),
                 )
 
         else:
