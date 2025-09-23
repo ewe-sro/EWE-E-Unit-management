@@ -10,8 +10,8 @@ now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 import configparser
 
-#config_path = "/data/user-app/charging_data/charging_data.conf"
-config_path = "./charging_data.conf"
+config_path = "/data/user-app/charging_data/charging_data.conf"
+# config_path = "./charging_data.conf"
 
 
 def load_config() -> Optional[Dict[str, str]]:
@@ -99,9 +99,7 @@ def set_logging(config) -> None:
 #######################################################
 
 
-def get_last_known_state(
-    device_uid: str, config
-) -> Optional[str]:
+def get_last_known_state(device_uid: str, config) -> Optional[str]:
     """
     Gets the last known charging state of a charging controller.
 
@@ -148,9 +146,7 @@ def get_last_known_state(
 #######################################################
 
 
-def set_last_known_state(
-    device_uid: str, state: str, config
-) -> None:
+def set_last_known_state(device_uid: str, state: str, config) -> None:
     """
     Sets the last known charging state of a charging controller.
 
@@ -294,6 +290,7 @@ def get_highest_id(csv_file):
 ############################################
 
 import requests
+
 Response = requests.models.Response
 
 
@@ -360,7 +357,9 @@ def send_request(
         return None
 
     except requests.exceptions.Timeout:
-        logging.error(f"Request timed out after {timeout} seconds: {str(err)}. URL: {url}")
+        logging.error(
+            f"Request timed out after {timeout} seconds: {str(err)}. URL: {url}"
+        )
         return None
 
     except requests.exceptions.RequestException as err:
@@ -371,7 +370,6 @@ def send_request(
 ################################################
 ############# END SEND API REQUEST #############
 ################################################
-
 
 
 ###############################################
@@ -404,7 +402,7 @@ def get_charging_point(controller_id: str, api_url: str):
     # If the API response is successful
     if charging_point_response is None:
         return charging_point_id, charging_point_name
-    
+
     # Get the JSON data from the response
     charging_point_data = charging_point_response.json()
 
