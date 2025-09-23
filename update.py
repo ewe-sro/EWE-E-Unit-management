@@ -54,6 +54,7 @@ import os
 # The directory in which the updated script files will be saved
 software_directory = "/data/user-app/"
 
+
 def save_file(path: str, content: bytes):
     """
     Save file to the filesystem. Also checks if the provided file differs from the current file if it exists.
@@ -69,38 +70,38 @@ def save_file(path: str, content: bytes):
     # which is the dedicated directory for saving custom software
     # see CHARX SEC-XXXX manual - 2.5.2 Directory structure and accessing the file system
     if not software_directory in path:
-        logging.error(f"The file needs to be save inside {software_directory}, path: {path}")
+        logging.error(
+            f"The file needs to be save inside {software_directory}, path: {path}"
+        )
 
         return None
 
     # If the file doesn't exists, create it
     if not os.path.exists(path):
         # Write the file to the filesystem
-        with open(path, 'wb') as file: # Binary mode
+        with open(path, "wb") as file:  # Binary mode
             file.write(content)
 
         logging.info(f"New script file was saved to the filesystem, path: {path}")
 
         return True
-    
-    with open(path, 'rb') as file:
+
+    with open(path, "rb") as file:
         file_content = file.read()
 
     # If the contents of the existing file and the new file are different, write the new file
     if content != file_content:
-        with open(path, 'wb') as file: # Binary mode
+        with open(path, "wb") as file:  # Binary mode
             file.write(content)
-            
+
         logging.info(f"Script file was updated, path: {path}")
 
         return True
 
-    
 
 #######################################################
 ############# END SAVE FILE TO FYLESYSTEM #############
 #######################################################
-
 
 
 ######################################################
@@ -113,6 +114,7 @@ import subprocess
 # The path to python executable
 python_path = "/usr/bin/python3"
 
+
 def terminate_script_process(path: str):
     """
     Terminate a script process.
@@ -124,24 +126,27 @@ def terminate_script_process(path: str):
     """
     process_name = f"{python_path} {path}"
 
-    for proc in psutil.process_iter(attrs=['pid', 'cmdline']):
+    for proc in psutil.process_iter(attrs=["pid", "cmdline"]):
         try:
-            cmdline = " ".join(proc.info['cmdline'])  # Join cmdline args into a string
-            if process_name in cmdline:  # Check if the script name appears in the command line
-                proc.terminate() # Stop the process gracefully
+            cmdline = " ".join(proc.info["cmdline"])  # Join cmdline args into a string
+            if (
+                process_name in cmdline
+            ):  # Check if the script name appears in the command line
+                proc.terminate()  # Stop the process gracefully
 
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass  # Process may have ended before we accessed it
+
 
 ##########################################################
 ############# END TERMINATE A SCRIPT PROCESS #############
 ##########################################################
 
 
-
 ############################################
 ############# START THE SCRIPT #############
 ############################################
+
 
 def start_script_process(path: str):
     """
@@ -155,18 +160,17 @@ def start_script_process(path: str):
 
     # Start a process as a new independent instance
     subprocess.Popen(
-        [ python_path, path ], 
-        start_new_session=True, # Equivalent to nohup: make the process immune to hangups
-        close_fds=True, # Close parent file descriptors in child process
+        [python_path, path],
+        start_new_session=True,  # Equivalent to nohup: make the process immune to hangups
+        close_fds=True,  # Close parent file descriptors in child process
         stdout=open("/dev/null", "w"),  # Prevents terminal-related failures
-        stderr=open("/dev/null", "w")
+        stderr=open("/dev/null", "w"),
     )
 
 
 ################################################
 ############# END START THE SCRIPT #############
 ################################################
-
 
 
 ##########################################################
@@ -176,6 +180,7 @@ def start_script_process(path: str):
 # The user-application-start file, that is used for declaring
 # which scripts should be started automatically on charger startup
 user_application_start = "/data/user-app/user-application-start"
+
 
 def start_script_automatically(path: str):
     """
@@ -191,12 +196,14 @@ def start_script_automatically(path: str):
     # If the user-application-start file doesn't exists,
     # log the error and exit the function
     if not os.path.exists(user_application_start):
-        logging.error(f"user-application-start file not found, path: {user_application_start}")
+        logging.error(
+            f"user-application-start file not found, path: {user_application_start}"
+        )
 
         return None
-    
+
     # Open the user-application-start file in read/write mode
-    with open(user_application_start, 'r+') as file:
+    with open(user_application_start, "r+") as file:
         content = file.read()
 
         # If the file is not started automatically already
@@ -214,11 +221,9 @@ def start_script_automatically(path: str):
         return True
 
 
-
 ##############################################################
 ############# END START THE SCRIPT AUTOMATICALLY #############
 ##############################################################
-
 
 
 #################################################
@@ -227,9 +232,10 @@ def start_script_automatically(path: str):
 
 import re
 
+
 def is_valid_cron(cron_expression: str) -> bool:
     """Validates a cron expression format using regex."""
-    
+
     # Regex pattern for each field (minute, hour, day, month, weekday)
     cron_pattern = (
         r"^([0-5]?\d|\*|(\d+[-/]\d+)|(\d+(,\d+)*))\s"  # Minutes (0-59)
@@ -240,6 +246,7 @@ def is_valid_cron(cron_expression: str) -> bool:
     )
 
     return bool(re.match(cron_pattern, cron_expression.strip()))
+
 
 def setup_cron_job(cron_expression: str, path: str):
     """
@@ -261,10 +268,12 @@ def setup_cron_job(cron_expression: str, path: str):
 
     # The cron job row to be added
     cron_job = f"{cron_expression} {python_path} {path}"
-    
+
     # Get the current crontab
     try:
-        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, check=True
+        )
         cron_jobs = result.stdout
     except subprocess.CalledProcessError:
         cron_jobs = ""  # If crontab is empty, treat it as an empty string
@@ -280,21 +289,24 @@ def setup_cron_job(cron_expression: str, path: str):
         try:
             # Write the updated crontab
             subprocess.run(["crontab", "-"], input=new_cron_jobs, text=True, check=True)
+
             logging.info(f"Cron job was created: {cron_job}")
+            print(f"Cron job was created: {cron_job}")
+
             return True
-        
+
         except subprocess.CalledProcessError as err:
             # If updating the crontab failed log the error and exit the function
             logging.error(f"Failed to update crontab: {err}")
 
             return None
-        
+
     return True  # Cronjob already exists
+
 
 #####################################################
 ############# END SETUP UPDATE CRON JOB #############
 #####################################################
-
 
 
 ###############################################
@@ -303,6 +315,7 @@ def setup_cron_job(cron_expression: str, path: str):
 
 from utils import send_request
 from typing import Dict, Union
+
 
 def update_scripts():
     """
@@ -313,17 +326,15 @@ def update_scripts():
 
     # Call the EMM API and get the script file names and where they should be saved
     scripts_response = send_request(
-        url=f"{emm_api_host}/api/public/script",
-        method="GET",
-        headers=emm_headers
+        url=f"{emm_api_host}/api/public/script", method="GET", headers=emm_headers
     )
 
     if scripts_response is None:
         return None
-    
+
     # Get the JSON data we got from the EMM APi
     scripts: Dict[str, Dict[str, Union[str, bool]]] = scripts_response.json()
-    
+
     # Loop over the script names we got from the API
     for script_name in scripts:
         print(f"Updating script file: {script_name}")
@@ -332,7 +343,7 @@ def update_scripts():
         file_response = send_request(
             url=f"{emm_api_host}/api/public/script/{script_name}",
             method="GET",
-            headers=emm_headers
+            headers=emm_headers,
         )
 
         # If the API request wasn't successful go to the next file
