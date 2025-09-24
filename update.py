@@ -66,7 +66,7 @@ def save_file(path: str, content: bytes):
         True if successfully processed, None if failed
     """
 
-    # The file on the controller needs to save inside '/data/user-app'
+    # The file on the controller needs to be saved inside '/data/user-app'
     # which is the dedicated directory for saving custom software
     # see CHARX SEC-XXXX manual - 2.5.2 Directory structure and accessing the file system
     if not software_directory in path:
@@ -96,7 +96,7 @@ def save_file(path: str, content: bytes):
 
         logging.info(f"Script file was updated, path: {path}")
 
-        return True
+    return True
 
 
 #######################################################
