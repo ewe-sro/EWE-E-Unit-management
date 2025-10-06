@@ -243,6 +243,7 @@ from utils import (
 )
 
 import json
+from typing import Any, Dict
 
 # REST API settings
 api_host = config["RestApi"]["Host"]
@@ -309,16 +310,31 @@ def on_vehicle_status_changed(client, userdata, message):
     if point_config_response is None:
         return None
 
-    point_config_data = point_config_response.json()
+    # Parse the JSON response from the point configuration API
+    point_config_data: Dict[str, Any] = point_config_response.json()
 
-    # Get the RFID data from API
-    rfid_url = f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{point_config_data['rfid_reader_device_uid']}/data?param_list=rfid"
-    rfid_response = send_request(url=rfid_url, method="GET")
-    # If we couldn't get the data end the function
-    if rfid_response is None:
-        return None
+    # Extract RFID reader UID safely
+    raw_uid = point_config_data.get("rfid_reader_device_uid")
+    rfid_reader_uid: str = raw_uid.strip() if isinstance(raw_uid, str) else ""
 
-    rfid_data = rfid_response.json()
+    # Check if the RFID reader is not configured or marked as inactive
+    if not rfid_reader_uid or rfid_reader_uid.lower().startswith("inacti"):
+        # Log a warning that this device has no RFID configured
+        logging.warning(f"RFID reader not configured for device {device_uid}, skipping RFID request")
+        
+        # Use default empty RFID data to avoid breaking later code
+        rfid_data = {"rfid": {"tag": "", "timestamp": ""}}
+
+    else:
+        # Get the RFID data from API
+        rfid_url = f"http://{api_host}:{api_port}/api/v1.0/charging-controllers/{rfid_reader_uid}/data?param_list=rfid"
+        rfid_response = send_request(url=rfid_url, method="GET")
+
+        # If the request failed (None returned), skip processing this controller
+        if rfid_response is None:
+            return None
+
+        rfid_data = rfid_response.json()
 
     ############################################
     ############# END GET API DATA #############

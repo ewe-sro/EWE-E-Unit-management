@@ -218,7 +218,7 @@ def controller_data_to_json():
         json.dump(output_data, json_file)
 
     # If EMM API is configured also save to EMM web app
-    if emm_api_host != "" and emm_api_key != "":
+    if emm_api_host and emm_api_key:
         send_request(
             url=f"{emm_api_host}/api/public/controller-data",
             method="POST",
