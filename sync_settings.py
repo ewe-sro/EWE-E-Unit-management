@@ -107,6 +107,7 @@ def apply_emm_settings() -> None:
         settings_data = {
             "charging_point_name": controller_settings[controller]["settings"]["chargingPointName"],
             "location": controller_settings[controller]["settings"]["location"],
+            "release_charging_mode": controller_settings[controller]["settings"]["releaseChargingMode"],
             "minimum_charge_current": controller_settings[controller]["settings"]["minimumChargeCurrent"],
             "maximum_charge_current": controller_settings[controller]["settings"]["maximumChargeCurrent"],
             "fallback_charge_current": controller_settings[controller]["settings"]["fallbackChargeCurrent"],
