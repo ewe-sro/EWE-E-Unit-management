@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 import os
 
@@ -10,16 +10,19 @@ now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 import configparser
 
-config_path = "/data/user-app/charging_data/charging_data.conf"
-# config_path = "./charging_data.conf"
+PROD_PATH = "/data/user-app/charging_data/charging_data.conf"
+DEV_PATH = "./charging_data.conf"
+
+# Automatically choose the config based on what actually exists
+config_path = PROD_PATH if os.path.exists(PROD_PATH) else DEV_PATH
 
 
-def load_config() -> Optional[Dict[str, str]]:
+def load_config() -> Optional[configparser.ConfigParser]:
     """
     Load config data from a .conf file.
 
     Returns:
-        Dict containing the config data if successful, None if failed
+        configparser.ConfigParser object if successful, None if failed
     """
 
     # Check if config file exists
@@ -391,8 +394,7 @@ def is_between_dates(start_datetime, end_datetime, target_datetime):
 #################################################
 
 
-def get_charging_point(controller_id: str, api_url: str):
-    # Default return values
+def get_charging_point(controller_id: str, api_url: str) -> Tuple[Optional[str], Optional[str]]:
     charging_point_id: Optional[str] = None
     charging_point_name: Optional[str] = None
 
@@ -402,16 +404,19 @@ def get_charging_point(controller_id: str, api_url: str):
     # If the API response is successful
     if charging_point_response is None:
         return charging_point_id, charging_point_name
+    
+    try:
+        charging_point_data = charging_point_response.json()
 
-    # Get the JSON data from the response
-    charging_point_data = charging_point_response.json()
+        for index, data in charging_point_data["charging_points"].items():
+            if data["charging_controller_device_uid"] == controller_id:
+                charging_point_id = data["id"]
+                charging_point_name = data["charging_point_name"]
 
-    # Loop over the charging points and their data
-    for index, data in charging_point_data["charging_points"].items():
-        # Check if the device_uid matches current device_uid variable
-        if data["charging_controller_device_uid"] == controller_id:
-            charging_point_id = data["id"]
-            charging_point_name = data["charging_point_name"]
+                break
+
+    except ValueError:
+        logging.error(f"Failed to parse JSON from charging point API response: {charging_point_response.text}")
 
     return charging_point_id, charging_point_name
 
@@ -419,3 +424,220 @@ def get_charging_point(controller_id: str, api_url: str):
 #####################################################
 ############# END GET CHARGING POINT ID #############
 #####################################################
+
+
+###################################################
+############# SQLITE QUEUE MANAGEMENT #############
+###################################################
+
+import sqlite3
+import json
+
+# The queue database file name 
+QUEUE_DB_NAME = "data_queue.db"
+
+
+def _get_queue_db_path(config) -> str:
+    """
+    Constructs the full file path for the SQLite queue database.
+
+    Args:
+        config: Dictionary containing configuration values, specifically 'AppSettings'.
+    Returns:
+        The full path to the SQLite database file.
+    """
+
+    data_folder_path = config["AppSettings"]["FileFolder"]
+    return os.path.join(data_folder_path, QUEUE_DB_NAME)
+
+
+def initialize_queue_db(config) -> None:
+    """
+    Initializes the SQLite database for the charging session queue.
+    Creates the 'charging_session' table if it does not already exist.
+
+    Args:
+        config: Dictionary containing configuration values, specifically 'AppSettings'.
+    Returns:
+        None
+    """
+
+    # Get the database full file path
+    db_path = _get_queue_db_path(config)
+
+    # Initialize the SQLite connection
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Create the database table if it doesn't exist
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS charging_session (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL UNIQUE, -- The 'id' from your charging data
+            device_uid TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            type TEXT NOT NULL, -- 'start' or 'end'
+            status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'sent', 'failed'
+            attempts INTEGER DEFAULT 0,
+            last_attempt_at TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+    # Close the database connection
+    conn.close()
+
+    logging.info(f"Initialized SQLite queue database at {db_path}")
+
+
+def add_to_queue(config, session_id: int, device_uid: str, payload: Dict[str, Any], session_type: str) -> None:
+    """
+    Adds a charging session event (start or end) to the SQLite queue.
+    If an entry with the same session_id and type already exists,
+    its payload is updated, and its status is reset to 'pending' for re-transmission.
+
+    Args:
+        config: Dictionary containing configuration values.
+        session_id: The unique identifier for the charging session.
+        device_uid: The unique identifier of the charging device.
+        payload: A dictionary containing the full charging session data,
+                 which will be stored as a JSON string.
+        session_type: The type of the session event, either 'start' or 'end'.
+    Returns:
+        None
+    """
+
+    # Get the database full file path
+    db_path = _get_queue_db_path(config)
+
+    # Initialize the SQLite connection
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Convert payload dict to JSON string for storage
+    payload_json = json.dumps(payload)
+    current_time = datetime.now().isoformat()
+
+    # Check if a session with this session_id and type already exists
+    # This is crucial to avoid duplicates when retrying `save_to_queue` due to other failures
+    cursor.execute("""
+        SELECT id FROM charging_session
+        WHERE session_id = ? AND type = ?
+    """, (str(session_id), session_type))
+    existing_entry = cursor.fetchone()
+
+    if existing_entry:
+        # If it exists, update it (e.g., if we are retrying an 'end' session that was already 'pending')
+        # For simplicity, we'll just update the payload and reset status to pending for re-transmission
+        cursor.execute("""
+            UPDATE charging_session
+            SET payload = ?, status = 'pending', attempts = 0, last_attempt_at = NULL, created_at = ?
+            WHERE session_id = ? AND type = ?
+        """, (payload_json, current_time, str(session_id), session_type))
+        logging.info(f"Updated existing charging session in queue: ID {session_id}, Type {session_type}")
+    else:
+        # Otherwise, insert a new entry
+        cursor.execute("""
+            INSERT INTO charging_session (session_id, device_uid, payload, type, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (str(session_id), device_uid, payload_json, session_type, current_time))
+        logging.info(f"Added charging session to queue: ID {session_id}, Type {session_type}")
+
+    conn.commit()
+    conn.close()
+
+
+def get_pending_queue_items(config, max_attempts: int = 5) -> List[Dict]:
+    """
+    Retrieves a list of charging session events from the queue that are
+    either 'pending' or 'failed' and have not exceeded the maximum number of attempts.
+    Items are ordered by their creation time.
+
+    Args:
+        config: Dictionary containing configuration values.
+        max_attempts: The maximum number of attempts after which a failed item
+                      will no longer be retrieved from the queue.
+    Returns:
+        A list of dictionaries, where each dictionary represents a queued item
+        with its details (session_id, device_uid, payload, type,
+        attempts, last_attempt_at, and queue_db_id). Returns an empty list if no items.
+    """
+
+    # Get the database full file path
+    db_path = _get_queue_db_path(config)
+
+    # Initialize the SQLite connection
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Fetch items that are pending or failed but haven't exceeded max_attempts, ordered by creation time
+    cursor.execute("""
+        SELECT session_id, device_uid, payload, type, attempts, last_attempt_at, id
+        FROM charging_session
+        WHERE status IN ('pending', 'failed') AND attempts < ?
+        ORDER BY created_at ASC
+    """, (max_attempts,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    items = []
+    for row in rows:
+        try:
+            items.append({
+                "queue_db_id": row[6], # The internal SQLite primary key
+                "session_id": int(row[0]),
+                "device_uid": row[1],
+                "payload": json.loads(row[2]), # Convert JSON string back to dict
+                "type": row[3],
+                "attempts": row[4],
+                "last_attempt_at": row[5]
+            })
+        except json.JSONDecodeError:
+            logging.error(f"Error decoding JSON payload for queue item: {row[2]}")
+        except ValueError:
+            logging.error(f"Error converting session_id to int for queue item: {row[0]}")
+    return items
+
+def update_queue_item_status(config, queue_db_id: int, status: str, increment_attempts: bool = False) -> None:
+    """
+    Updates the status of a specific item in the SQLite queue.
+    Optionally increments the 'attempts' count and updates 'last_attempt_at'.
+
+    Args:
+        config: Dictionary containing configuration values.
+        queue_db_id: The internal SQLite primary key of the queue item to update.
+        status: The new status for the item ('pending', 'sent', 'failed').
+        increment_attempts: If True, the 'attempts' count will be increased by one.
+    Returns:
+        None
+    """
+
+
+     # Get the database full file path
+    db_path = _get_queue_db_path(config)
+
+    # Initialize the SQLite connection
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    current_time = datetime.now().isoformat()
+
+    if increment_attempts:
+        cursor.execute("""
+            UPDATE charging_session
+            SET status = ?, attempts = attempts + 1, last_attempt_at = ?
+            WHERE id = ?
+        """, (status, current_time, queue_db_id))
+    else:
+        cursor.execute("""
+            UPDATE charging_session
+            SET status = ?, last_attempt_at = ?
+            WHERE id = ?
+        """, (status, current_time, queue_db_id))
+    conn.commit()
+    conn.close()
+
+#######################################################
+############# END SQLITE QUEUE MANAGEMENT #############
+#######################################################
