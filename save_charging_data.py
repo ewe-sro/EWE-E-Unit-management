@@ -23,9 +23,7 @@ print(f"[{now}] Script started")
 
 from utils import load_config
 
-config = (
-    load_config()  # Loads config from /data/user-app/charging_data/charging_data.conf
-)
+config = load_config()  # Loads config from /data/user-app/charging_data/charging_data.conf
 
 ###########################################
 ############# END LOAD CONFIG #############
@@ -359,8 +357,8 @@ def on_vehicle_status_changed(client, userdata, message):
                 - datetime.fromisoformat(energy_data["energy"]["timestamp"])
             )
 
-            # Check if RFID timestamp is within 60 seconds of the start of the charging session
-            if rfid_difference > timedelta(seconds=60):
+            # Check if RFID timestamp is within 90 seconds of the start of the charging session
+            if rfid_difference > timedelta(seconds=90):
                 rfid_data["rfid"]["tag"] = ""
                 rfid_data["rfid"]["timestamp"] = ""
 
