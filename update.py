@@ -369,6 +369,8 @@ def update_scripts():
 
         # If the file shouldn't be started automatically, go to the next file
         if scripts[script_name]["persistent"] is False:
+            # Terminate a process with the same filepath, incase we changed `persistent: true` to `persistent: false`
+            terminate_script_process(file_path)
             continue
 
         # Configure the file to be started automatically
