@@ -219,6 +219,40 @@ def start_script_automatically(path: str):
             file.write(f"{python_path} {path} &")
 
         return True
+    
+
+def stop_starting_script_automatically(path: str):
+    """
+    Remove the script from the user-application-start file so it no longer starts automatically on charger startup.
+
+    Args:
+        path: The full filesystem path of the script to remove
+    Returns:
+        True if successfully processed, None if failed
+    """
+    if not os.path.exists(user_application_start):
+        logging.error(
+            f"user-application-start file not found, path: {user_application_start}"
+        )
+
+        return None
+
+    # The exact pattern added by the start_script_automatically function
+    line_to_remove = f"{python_path} {path} &"
+
+    with open(user_application_start, "r") as file:
+        lines = file.readlines()
+
+    # Filter out the line if it exists (ignoring trailing/leading whitespace)
+    new_lines = [line for line in lines if line.strip() != line_to_remove]
+
+    # Only write back if we actually removed something
+    if len(new_lines) != len(lines):
+        with open(user_application_start, "w") as file:
+            file.writelines(new_lines)
+        logging.info(f"Script removed from automatic startup: {path}")
+
+    return True
 
 
 ##############################################################
@@ -369,8 +403,12 @@ def update_scripts():
 
         # If the file shouldn't be started automatically, go to the next file
         if scripts[script_name]["persistent"] is False:
+            # Remove from the startup file so it doesn't start on reboot
+            stop_starting_script_automatically(file_path)
+
             # Terminate a process with the same filepath, incase we changed `persistent: true` to `persistent: false`
             terminate_script_process(file_path)
+
             continue
 
         # Configure the file to be started automatically
