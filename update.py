@@ -6,30 +6,188 @@
 # WWW: mobility.ewe.cz
 #######################################
 
+from typing import Dict, Optional, Union, Any
+from datetime import datetime
+
+now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 #######################################
 ############# LOAD CONFIG #############
 #######################################
 
-from utils import load_config
+import os
+import configparser
 
-config = (
-    load_config()  # Loads config from /data/user-app/charging_data/charging_data.conf
-)
+PROD_PATH = "/data/user-app/charging_data/charging_data.conf"
+DEV_PATH = "./charging_data.conf"
+
+# Automatically choose the config based on what actually exists
+config_path = PROD_PATH if os.path.exists(PROD_PATH) else DEV_PATH
+
+
+def load_config_standalone() -> Optional[configparser.ConfigParser]:
+    """
+    Load config data from a .conf file.
+
+    Returns:
+        configparser.ConfigParser object if successful, None if failed
+    """
+
+    # Check if config file exists
+    if os.path.isfile(config_path):
+        # Parse the config file
+        config = configparser.ConfigParser()
+        config.read(config_path)
+
+        return config
+
+    else:
+        # If the config file wasn't found terminate the script
+        print(f"[{now}] Config file not found, expected filename: {config_path}")
+        print(f"[{now}] Terminating the script")
+        exit()
+
+config = load_config_standalone()
 
 ###########################################
 ############# END LOAD CONFIG #############
 ###########################################
 
 
+############################################
+############# SEND API REQUEST #############
+############################################
+
+import requests
+
+Response = requests.models.Response
+
+
+def send_request_standalone(
+    url: str,
+    method: str,
+    headers: Optional[Dict[str, str]] = None,
+    params: Optional[Dict[str, Any]] = None,
+    data: Optional[Dict[str, Any]] = None,
+    json: Optional[Dict[str, Any]] = None,
+    timeout: int = 10,
+) -> Optional[Response]:
+    """
+    Make an HTTP request with error logging. Continues execution on error.
+
+    Args:
+        url: The URL to send the request to
+        method: HTTP method to use (GET, POST, PUT, DELETE, PATCH)
+        headers: Optional dictionary of HTTP headers
+        params: Optional dictionary of query parameters
+        data: Optional dictionary of form data
+        json: Optional dictionary of JSON data
+        timeout: Request timeout in seconds
+    Returns:
+        The response if successful, None if failed
+    """
+
+    # Validate the supplied method
+    method = method.upper()
+    if method not in ["GET", "POST", "PUT", "DELETE", "PATCH"]:
+        logging.error(f"Invalid HTTP method: {method}")
+        return None
+
+    # Set default headers if none provided
+    if headers is None:
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+
+    try:
+        # Send the API request
+        response = requests.request(
+            method=method,
+            url=url,
+            headers=headers,
+            params=params,
+            data=data,
+            json=json,
+            timeout=timeout,
+        )
+
+        # Log but don't raise for bad status codes
+        if response.status_code >= 400:
+            logging.error(
+                f"HTTP {response.status_code} error occurred: {response.text}. URL: {url}"
+            )
+            return None
+
+        # Return the response
+        return response
+
+    except requests.exceptions.ConnectionError as err:
+        logging.error(
+            f"Failed to connect to the server. Please check your internet connection: {str(err)}. URL: {url}"
+        )
+        return None
+
+    except requests.exceptions.Timeout:
+        logging.error(
+            f"Request timed out after {timeout} seconds: {str(err)}. URL: {url}"
+        )
+        return None
+
+    except requests.exceptions.RequestException as err:
+        logging.error(f"Request failed: {str(err)}. URL: {url}")
+        return None
+
+
+################################################
+############# END SEND API REQUEST #############
+################################################
+
+
 #######################################
 ############# SET LOGGING #############
 #######################################
 
-from utils import set_logging
+from logging.handlers import RotatingFileHandler
 import logging
 
-set_logging(config)
+
+def set_logging_standalone(config) -> None:
+    """
+    Sets up logging for record error and info message into a log file.
+
+    Args:
+        config: Dictionary containing configuration values
+
+    Returns:
+        Dict containing the config data if successful, None if failed
+    """
+
+    # Set the log location
+    log_folder_path = config["LogSettings"]["LogFolder"]
+    log_file_path = config["LogSettings"]["LogFile"]
+    log_location = log_folder_path + log_file_path
+
+    # Check if folder for log DOESN'T exists
+    if not os.path.isdir(log_folder_path):
+        # Create the log folder
+        os.makedirs(log_folder_path)
+
+    # Set the log file max size
+    log_max_size = int(config["LogSettings"]["LogFileQuotaMBytes"]) * 1024 * 1024
+    # Set the log format
+    log_format = "%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s"
+
+    # Set the log handler
+    rfh = RotatingFileHandler(
+        log_location,
+        mode="a",
+        maxBytes=log_max_size,
+        backupCount=int(config["LogSettings"]["LogFileSplits"]),
+        encoding=None,
+        delay=0,
+    )
+
+    logging.basicConfig(level=logging.INFO, format=log_format, handlers=[rfh])
+
+set_logging_standalone(config)
 
 ###########################################
 ############# END SET LOGGING #############
@@ -347,9 +505,6 @@ def setup_cron_job(cron_expression: str, path: str):
 ############# UPDATE SCRIPT FILES #############
 ###############################################
 
-from utils import send_request
-from typing import Dict, Union
-
 
 def update_scripts():
     """
@@ -359,7 +514,7 @@ def update_scripts():
     print("Getting a list of files to update")
 
     # Call the EMM API and get the script file names and where they should be saved
-    scripts_response = send_request(
+    scripts_response = send_request_standalone(
         url=f"{emm_api_host}/api/public/script", method="GET", headers=emm_headers
     )
 
@@ -374,7 +529,7 @@ def update_scripts():
         print(f"Updating script file: {script_name}")
 
         # Call the EMM API and get the script file
-        file_response = send_request(
+        file_response = send_request_standalone(
             url=f"{emm_api_host}/api/public/script/{script_name}",
             method="GET",
             headers=emm_headers,
