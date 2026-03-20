@@ -1,5 +1,5 @@
 from typing import Dict, List, Tuple, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
@@ -95,197 +95,6 @@ def set_logging(config) -> None:
 ###########################################
 ############# END SET LOGGING #############
 ###########################################
-
-
-#######################################################
-############# GET LAST KNOWN DEVICE STATE #############
-#######################################################
-
-
-def get_last_known_state(device_uid: str, config) -> Optional[str]:
-    """
-    Gets the last known charging state of a charging controller.
-
-    Args:
-        device_uid: Charging controller ID
-        config: Dictionary containing configuration values
-
-    Returns:
-        The last known charging state of the charging controller - 'connected' or 'disconnected' if successful, None if failed
-    """
-
-    state_folder_path = config["AppSettings"]["FileFolder"] + ".device_states/"
-    state_file_path = state_folder_path + device_uid + ".state"
-
-    # Check if folder for device states DOESN'T exists, if so create it
-    if not os.path.isdir(state_folder_path):
-        # Create the device_states folder
-        os.makedirs(state_folder_path)
-
-    # State file already exists
-    if os.path.isfile(state_file_path):
-        # Open the state file in read mode
-        file = open(state_file_path, "r")
-
-        state = file.read()
-
-        # If the state is valid
-        if state == "connected" or state == "disconnected":
-            return state
-        else:
-            return None
-
-    else:
-        return None
-
-
-###########################################################
-############# END GET LAST KNOWN DEVICE STATE #############
-###########################################################
-
-
-#######################################################
-############# SET LAST KNOWN DEVICE STATE #############
-#######################################################
-
-
-def set_last_known_state(device_uid: str, state: str, config) -> None:
-    """
-    Sets the last known charging state of a charging controller.
-
-    Args:
-        device_uid: Charging controller ID
-        state: The state that will be saved
-        config: Dictionary containing configuration values
-
-    Returns:
-        None
-    """
-    state_folder_path = config["AppSettings"]["FileFolder"] + ".device_states/"
-    state_file_path = state_folder_path + device_uid + ".state"
-
-    # Check if folder for device states DOESN'T exists
-    if not os.path.isdir(state_folder_path):
-        # Create the device_states folder
-        os.makedirs(state_folder_path)
-
-    # If the device state changed to 'connected'
-    if state == "connected" or state == "disconnected":
-        # Open the state file in overwrite mode
-        file = open(state_file_path, "w")
-
-        file.write(state)
-
-        logging.info(f"Setting device state deviceUid: {device_uid}, state: {state}")
-
-    else:
-        logging.info(f"Incorrect device state deviceUid: {device_uid}, state: {state}")
-
-
-###########################################################
-############# END SET LAST KNOWN DEVICE STATE #############
-###########################################################
-
-
-#########################################
-############# READ CSV DATA #############
-#########################################
-
-
-def read_csv_data(csv_file, device_uid):
-    # Open the existing CSV
-    open_csv = open(csv_file, "r")
-
-    # Read the CSV data
-    reader = csv.DictReader(open_csv)
-
-    # Put the data inside a list
-    current_data = list(reader)
-
-    # Set the variables for data updating
-    highest_id = 0
-    edit_row = None
-    start_real_power = None
-    start_timestamp = ""
-
-    # Set the variable for checking if the charging session is completed already
-    end_timestamp = ""
-
-    # RFID variables
-    rfid_timestamp = ""
-    rfid_tag = ""
-
-    # Loop over the data to find correct row for edit
-    for row in current_data:
-        # If the deviceUid is the same and id is higher that currently highest known id
-        if row["deviceUid"] == device_uid and int(row["id"]) > highest_id:
-            edit_row = row
-            highest_id = int(row["id"])
-            start_real_power = int(row["startRealPowerWh"])
-            start_timestamp = row["startTimestamp"]
-            end_timestamp = row["endTimestamp"]
-            rfid_timestamp = row["rfidTimestamp"]
-            rfid_tag = row["rfidTag"]
-
-    return (
-        current_data,
-        edit_row,
-        start_real_power,
-        start_timestamp,
-        end_timestamp,
-        rfid_timestamp,
-        rfid_tag,
-    )
-
-
-#############################################
-############# END READ CSV DATA #############
-#############################################
-
-
-########################################################
-############# GET HIGHEST ID FROM CSV DATA #############
-########################################################
-
-import csv
-
-
-def get_highest_id(csv_file):
-    """
-    Gets the highest integer from a CSV file in column ID.
-
-    Args:
-        csv_file: The path to the CSV file, from which we'll get the highest ID
-
-    Returns:
-        highest_id = either 0 or the highest found integer in ID column
-    """
-    # Open the existing CSV
-    open_csv = open(csv_file, "r")
-
-    # Read the CSV data
-    reader = csv.DictReader(open_csv)
-
-    # Put the data inside a list
-    current_data = list(reader)
-
-    # Set the variables for data updating
-    highest_id = 0
-
-    # Loop over the data to find the highest id
-    for row in current_data:
-        id = int(row["id"])
-
-        # If id is higher than currently highest known id
-        if id > highest_id:
-            highest_id = id
-
-    return highest_id
-
-
-############################################################
-############# END GET HIGHEST ID FROM CSV DATA #############
-############################################################
 
 
 ############################################
@@ -465,44 +274,135 @@ def initialize_queue_db(config) -> None:
     # Get the database full file path
     db_path = _get_queue_db_path(config)
 
-    # Initialize the SQLite connection
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    # Create the database table if it doesn't exist
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS charging_session (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL UNIQUE, -- The 'id' from your charging data
-            device_uid TEXT NOT NULL,
-            payload TEXT NOT NULL,
-            type TEXT NOT NULL, -- 'start' or 'end'
-            status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'sent', 'failed'
-            attempts INTEGER DEFAULT 0,
-            last_attempt_at TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
+        # 'charging_session' database table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS charging_session (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                charging_session_id TEXT NOT NULL,
+                device_uid TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                type TEXT NOT NULL, -- 'start' or 'end'
+                status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'sent', 'failed'
+                attempts INTEGER DEFAULT 0,
+                last_attempt_at TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(charging_session_id, type)
+            )
+        """)
 
-    # Close the database connection
-    conn.close()
+        # 'rfid_event' database table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rfid_event (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tag TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                claimed_by_session_id TEXT DEFAULT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rfid_timestamp ON rfid_event (timestamp);
+        """)
+
+        # 'device_status' database table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS device_status (
+                device_uid TEXT PRIMARY KEY,
+                status TEXT NOT NULL, -- 'connected', 'disconnected'
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        # 'controller_telemetry' database table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS controller_telemetry (
+                device_uid TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                last_updated TEXT
+            )
+        """)
 
     logging.info(f"Initialized SQLite queue database at {db_path}")
 
 
-def add_to_queue(config, session_id: int, device_uid: str, payload: Dict[str, Any], session_type: str) -> None:
+def save_rfid_event(config, tag: str, timestamp: str):
+    """Stores every RFID scan into a buffer."""
+
+    # Get the database full file path
+    db_path = _get_queue_db_path(config)
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+
+        # Avoid duplicate entries for the exact same scan
+        cursor.execute("SELECT id FROM rfid_event WHERE tag = ? AND timestamp = ?", (tag, timestamp))
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO rfid_event (tag, timestamp, created_at) VALUES (?, ?, ?)",
+                (tag, timestamp, datetime.now().isoformat())
+            )
+
+
+def find_and_claim_rfid(config, session_id: str, start_timestamp: str):
+    """
+    Finds the single unclaimed RFID tag closest to the start_timestamp 
+    within a window of -1 minute to +1 minute.
+    """
+    db_path = _get_queue_db_path(config)
+
+    start_datetime = datetime.fromisoformat(start_timestamp)
+
+    # Define the total window for a valid pairing
+    min_window = (start_datetime - timedelta(seconds=65)).isoformat()
+    max_window = (start_datetime + timedelta(seconds=60)).isoformat()
+    
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # We use julianday() to calculate the absolute difference in time.
+        # This finds the 'nearest' scan regardless of if it was before or after.
+        cursor.execute("""
+            SELECT id, tag, timestamp,
+            ABS(julianday(timestamp) - julianday(?)) as time_diff
+            FROM rfid_event 
+            WHERE claimed_by_session_id IS NULL 
+            AND timestamp >= ? AND timestamp <= ?
+            ORDER BY time_diff ASC LIMIT 1
+        """, (start_timestamp, min_window, max_window))
+        
+        row = cursor.fetchone()
+
+        if row:
+            logging.info(f"RFID Match: {row['tag']} found for {session_id} (time difference: {round(row['time_diff']*86400, 2)}s)")
+
+            # Mark this tag as used so the other charging point doesn't steal it
+            cursor.execute("""
+                UPDATE rfid_event 
+                SET claimed_by_session_id = ? 
+                WHERE id = ?
+            """, (session_id, row['id']))
+            
+            return row['tag'], row['timestamp']
+            
+    return None, None
+
+
+def add_to_queue(config, charging_session_id: str, device_uid: str, payload: Dict[str, Any], session_type: str) -> None:
     """
     Adds a charging session event (start or end) to the SQLite queue.
-    If an entry with the same session_id and type already exists,
+    If an entry with the same charging_session_id and type already exists,
     its payload is updated, and its status is reset to 'pending' for re-transmission.
 
     Args:
         config: Dictionary containing configuration values.
-        session_id: The unique identifier for the charging session.
+        charging_session_id: The unique identifier for the charging session.
         device_uid: The unique identifier of the charging device.
-        payload: A dictionary containing the full charging session data,
-                 which will be stored as a JSON string.
+        payload: A dictionary containing the full charging session data, which will be stored as a JSON string.
         session_type: The type of the session event, either 'start' or 'end'.
     Returns:
         None
@@ -510,83 +410,78 @@ def add_to_queue(config, session_id: int, device_uid: str, payload: Dict[str, An
 
     # Get the database full file path
     db_path = _get_queue_db_path(config)
-
-    # Initialize the SQLite connection
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
     
     # Convert payload dict to JSON string for storage
     payload_json = json.dumps(payload)
     current_time = datetime.now().isoformat()
 
-    # Check if a session with this session_id and type already exists
-    # This is crucial to avoid duplicates when retrying `save_to_queue` due to other failures
-    cursor.execute("""
-        SELECT id FROM charging_session
-        WHERE session_id = ? AND type = ?
-    """, (str(session_id), session_type))
-    existing_entry = cursor.fetchone()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    if existing_entry:
-        # If it exists, update it (e.g., if we are retrying an 'end' session that was already 'pending')
-        # For simplicity, we'll just update the payload and reset status to pending for re-transmission
+        # Check if a session with this charging_session_id and type already exists
+        # This is crucial to avoid duplicates when retrying `save_to_queue` due to other failures
         cursor.execute("""
-            UPDATE charging_session
-            SET payload = ?, status = 'pending', attempts = 0, last_attempt_at = NULL, created_at = ?
-            WHERE session_id = ? AND type = ?
-        """, (payload_json, current_time, str(session_id), session_type))
-        logging.info(f"Updated existing charging session in queue: ID {session_id}, Type {session_type}")
-    else:
-        # Otherwise, insert a new entry
-        cursor.execute("""
-            INSERT INTO charging_session (session_id, device_uid, payload, type, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (str(session_id), device_uid, payload_json, session_type, current_time))
-        logging.info(f"Added charging session to queue: ID {session_id}, Type {session_type}")
+            SELECT id FROM charging_session
+            WHERE charging_session_id = ? AND type = ?
+        """, (charging_session_id, session_type))
 
-    conn.commit()
-    conn.close()
+        existing_entry = cursor.fetchone()
+
+        if existing_entry:
+            # If it exists, update it (e.g., if we are retrying an 'end' session that was already 'pending')
+            # For simplicity, we'll just update the payload and reset status to pending for re-transmission
+            cursor.execute("""
+                UPDATE charging_session
+                SET payload = ?, status = 'pending', attempts = 0, last_attempt_at = NULL, created_at = ?
+                WHERE charging_session_id = ? AND type = ?
+            """, (payload_json, current_time, charging_session_id, session_type))
+            logging.info(f"Updated existing charging session in queue: ID: {charging_session_id}, Type: {session_type}")
+        else:
+            # Otherwise, insert a new entry
+            cursor.execute("""
+                INSERT INTO charging_session (charging_session_id, device_uid, payload, type, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (charging_session_id, device_uid, payload_json, session_type, current_time))
+            logging.info(f"Added charging session to queue: ID: {charging_session_id}, Type: {session_type}")
 
 
-def get_pending_queue_items(config, max_attempts: int = 5) -> List[Dict]:
+def get_pending_queue_items(config) -> List[Dict]:
     """
-    Retrieves a list of charging session events from the queue that are
-    either 'pending' or 'failed' and have not exceeded the maximum number of attempts.
-    Items are ordered by their creation time.
+    Retrieves a list of all charging session events from the queue that are
+    either 'pending' or 'failed', regardless of the number of attempts.
+    Items are ordered by their creation time to ensure they are processed in order.
 
     Args:
         config: Dictionary containing configuration values.
-        max_attempts: The maximum number of attempts after which a failed item
-                      will no longer be retrieved from the queue.
     Returns:
         A list of dictionaries, where each dictionary represents a queued item
-        with its details (session_id, device_uid, payload, type,
+        with its details (charging_session_id, device_uid, payload, type,
         attempts, last_attempt_at, and queue_db_id). Returns an empty list if no items.
     """
 
     # Get the database full file path
     db_path = _get_queue_db_path(config)
 
-    # Initialize the SQLite connection
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    # Fetch items that are pending or failed but haven't exceeded max_attempts, ordered by creation time
-    cursor.execute("""
-        SELECT session_id, device_uid, payload, type, attempts, last_attempt_at, id
-        FROM charging_session
-        WHERE status IN ('pending', 'failed') AND attempts < ?
-        ORDER BY created_at ASC
-    """, (max_attempts,))
-    rows = cursor.fetchall()
-    conn.close()
+        # Fetch items that are 'pending' or 'failed'. The attempt limit is removed.
+        # The ORDER BY is important to process older messages first.
+        cursor.execute("""
+            SELECT charging_session_id, device_uid, payload, type, attempts, last_attempt_at, id
+            FROM charging_session
+            WHERE status IN ('pending', 'failed')
+            ORDER BY created_at ASC
+        """)
+
+        rows = cursor.fetchall()
 
     items = []
     for row in rows:
         try:
             items.append({
                 "queue_db_id": row[6], # The internal SQLite primary key
-                "session_id": int(row[0]),
+                "charging_session_id": row[0],
                 "device_uid": row[1],
                 "payload": json.loads(row[2]), # Convert JSON string back to dict
                 "type": row[3],
@@ -595,9 +490,9 @@ def get_pending_queue_items(config, max_attempts: int = 5) -> List[Dict]:
             })
         except json.JSONDecodeError:
             logging.error(f"Error decoding JSON payload for queue item: {row[2]}")
-        except ValueError:
-            logging.error(f"Error converting session_id to int for queue item: {row[0]}")
+
     return items
+
 
 def update_queue_item_status(config, queue_db_id: int, status: str, increment_attempts: bool = False) -> None:
     """
@@ -617,27 +512,157 @@ def update_queue_item_status(config, queue_db_id: int, status: str, increment_at
      # Get the database full file path
     db_path = _get_queue_db_path(config)
 
-    # Initialize the SQLite connection
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
     current_time = datetime.now().isoformat()
 
-    if increment_attempts:
-        cursor.execute("""
-            UPDATE charging_session
-            SET status = ?, attempts = attempts + 1, last_attempt_at = ?
-            WHERE id = ?
-        """, (status, current_time, queue_db_id))
-    else:
-        cursor.execute("""
-            UPDATE charging_session
-            SET status = ?, last_attempt_at = ?
-            WHERE id = ?
-        """, (status, current_time, queue_db_id))
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+
+        if increment_attempts:
+            cursor.execute("""
+                UPDATE charging_session
+                SET status = ?, attempts = attempts + 1, last_attempt_at = ?
+                WHERE id = ?
+            """, (status, current_time, queue_db_id))
+        else:
+            cursor.execute("""
+                UPDATE charging_session
+                SET status = ?, last_attempt_at = ?
+                WHERE id = ?
+            """, (status, current_time, queue_db_id))
+
+
+def get_active_session_from_queue(config, device_uid: str) -> Optional[Dict[str, Any]]:
+    """
+    Finds the most recent, unterminated charging session for a given device
+    by looking for the latest 'start' event in the queue.
+
+    Args:
+        config: Dictionary containing configuration values.
+        device_uid: The unique identifier of the charging device.
+    Returns:
+        A dictionary containing the 'charging_session_id' and the full 'payload'
+        of the active session if one is found, otherwise None.
+    """
+    db_path = _get_queue_db_path(config)
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+
+            # Find the latest "start" event for this device. We assume the latest one is the active one.
+            # This is more robust than checking status, as an "end" event might not have been created yet.
+            cursor.execute("""
+                SELECT charging_session_id, payload
+                FROM charging_session
+                WHERE device_uid = ? AND type = 'start'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (device_uid,))
+
+            row = cursor.fetchone()
+
+            if row:
+                charging_session_id, payload_json = row
+
+                return {
+                    "charging_session_id": charging_session_id,
+                    "payload": json.loads(payload_json)
+                }
+            
+            # Return None if no row was found
+            return None
+        
+    except Exception as e:
+        logging.error(f"Could not read active session for device {device_uid} from queue: {e}")
+        return None
+
 
 #######################################################
 ############# END SQLITE QUEUE MANAGEMENT #############
 #######################################################
+
+
+#######################################################
+############# GET LAST KNOWN DEVICE STATE #############
+#######################################################
+
+
+def get_last_known_controller_state(device_uid: str, config) -> Optional[str]:
+    """
+    Gets the last known charging state of a charging controller from the database.
+
+    Args:
+        device_uid: Charging controller ID
+        config: Dictionary containing configuration values
+
+    Returns:
+        The last known charging state of the charging controller - 'connected' or 'disconnected' if successful, None if failed
+    """
+
+    db_path = _get_queue_db_path(config)
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM device_status WHERE device_uid = ?", (device_uid,))
+            result = cursor.fetchone()
+
+        if result:
+            return result[0] # result will be a tuple, e.g., ('connected',)
+        
+        return None # No entry found for this device UID
+    
+    except Exception as e:
+        logging.error(f"Could not read last known state for {device_uid} from database: {e}")
+        return None
+
+
+###########################################################
+############# END GET LAST KNOWN DEVICE STATE #############
+###########################################################
+
+
+#######################################################
+############# SET LAST KNOWN DEVICE STATE #############
+#######################################################
+
+
+def set_last_known_state(device_uid: str, state: str, config) -> None:
+    """
+    Sets the last known charging state of a charging controller in the database.
+
+    Args:
+        device_uid: Charging controller ID
+        state: The state that will be saved
+        config: Dictionary containing configuration values
+
+    Returns:
+        None
+    """
+    
+    if state not in ["connected", "disconnected"]:
+        logging.warning(f"Incorrect device state provided for {device_uid}: {state}")
+        return
+
+    db_path = _get_queue_db_path(config)
+    current_time = datetime.now().isoformat()
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+
+            # Use INSERT OR REPLACE to create and optionally delete the existing record
+            cursor.execute("""
+                INSERT OR REPLACE INTO device_status (device_uid, status, updated_at)
+                VALUES (?, ?, ?)
+            """, (device_uid, state, current_time))
+        
+        logging.info(f"Setting device state in DB: deviceUid: {device_uid}, state: {state}")
+
+    except Exception as e:
+        logging.error(f"Could not set last known state for {device_uid} in database: {e}")
+
+
+###########################################################
+############# END SET LAST KNOWN DEVICE STATE #############
+###########################################################
