@@ -322,7 +322,7 @@ def initialize_queue_db(config) -> None:
             CREATE TABLE IF NOT EXISTS controller_telemetry (
                 device_uid TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
-                last_updated TEXT
+                updated_at TEXT NOT NULL
             )
         """)
 
@@ -507,9 +507,6 @@ def update_queue_item_status(config, queue_db_id: int, status: str, increment_at
     Returns:
         None
     """
-
-
-     # Get the database full file path
     db_path = _get_queue_db_path(config)
 
     current_time = datetime.now().isoformat()
@@ -557,7 +554,7 @@ def get_active_session_from_queue(config, device_uid: str) -> Optional[Dict[str,
                 WHERE device_uid = ? AND type = 'start'
                 ORDER BY created_at DESC
                 LIMIT 1
-            """, (device_uid,))
+            """, (device_uid))
 
             row = cursor.fetchone()
 
@@ -579,6 +576,29 @@ def get_active_session_from_queue(config, device_uid: str) -> Optional[Dict[str,
 
 #######################################################
 ############# END SQLITE QUEUE MANAGEMENT #############
+#######################################################
+
+
+#######################################################
+############# SQLITE TELEMETRY MANAGEMENT #############
+#######################################################
+
+
+def update_controller_telemetry(config, device_uid: str, payload: Dict[str, Any]) -> None:
+    db_path = _get_queue_db_path(config)
+    current_time = datetime.now().isoformat()
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO controller_telemetry (device_uid, payload, updated_at)
+            VALUES (?, ?, ?)
+        """, (device_uid, payload, current_time))
+
+
+#######################################################
+############# SQLITE TELEMETRY MANAGEMENT #############
 #######################################################
 
 
