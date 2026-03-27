@@ -125,7 +125,7 @@ def send_request_standalone(
         )
         return None
 
-    except requests.exceptions.Timeout:
+    except requests.exceptions.Timeout as err:
         logging.error(
             f"Request timed out after {timeout} seconds: {str(err)}. URL: {url}"
         )
@@ -133,6 +133,10 @@ def send_request_standalone(
 
     except requests.exceptions.RequestException as err:
         logging.error(f"Request failed: {str(err)}. URL: {url}")
+        return None
+    
+    except Exception as err:
+        logging.error(f"Unexpected error: {str(err)}. URL: {url}")
         return None
 
 

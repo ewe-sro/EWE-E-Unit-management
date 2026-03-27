@@ -1,6 +1,7 @@
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, timedelta
 import os
+import time
 
 now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
@@ -168,7 +169,7 @@ def send_request(
         )
         return None
 
-    except requests.exceptions.Timeout:
+    except requests.exceptions.Timeout as err:
         logging.error(
             f"Request timed out after {timeout} seconds: {str(err)}. URL: {url}"
         )
@@ -260,6 +261,26 @@ def _get_queue_db_path(config) -> str:
     return os.path.join(data_folder_path, QUEUE_DB_NAME)
 
 
+def get_db_connection(config):
+    """
+    Returns a connection with optimized per-session settings.
+    """
+
+    db_path = _get_queue_db_path(config)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    # 20-second timeout to handle concurrency
+    conn = sqlite3.connect(db_path, timeout=20)
+    
+    # synchronous=NORMAL provides the best balance between performance and safety in WAL mode
+    conn.execute("PRAGMA synchronous=NORMAL;")
+
+    # Make SQLite return dictionaries
+    conn.row_factory = sqlite3.Row
+    
+    return conn
+
+
 def initialize_queue_db(config) -> None:
     """
     Initializes the SQLite database for the charging session queue.
@@ -271,11 +292,14 @@ def initialize_queue_db(config) -> None:
         None
     """
 
-    # Get the database full file path
     db_path = _get_queue_db_path(config)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(config) as conn:
         cursor = conn.cursor()
+
+        # Enable WAL mode for concurrent database writes
+        cursor.execute("PRAGMA journal_mode=WAL;")
 
         # 'charging_session' database table
         cursor.execute("""
@@ -326,68 +350,73 @@ def initialize_queue_db(config) -> None:
             )
         """)
 
-    logging.info(f"Initialized SQLite queue database at {db_path}")
+    logging.info(f"Initialized SQLite queue database with WAL mode")
 
 
 def save_rfid_event(config, tag: str, timestamp: str):
     """Stores every RFID scan into a buffer."""
 
-    # Get the database full file path
-    db_path = _get_queue_db_path(config)
-
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(config) as conn:
         cursor = conn.cursor()
 
         # Avoid duplicate entries for the exact same scan
         cursor.execute("SELECT id FROM rfid_event WHERE tag = ? AND timestamp = ?", (tag, timestamp))
+        
         if not cursor.fetchone():
             cursor.execute(
                 "INSERT INTO rfid_event (tag, timestamp, created_at) VALUES (?, ?, ?)",
                 (tag, timestamp, datetime.now().isoformat())
             )
 
+            logging.info(f"Saved RFID scan to database: {tag} at {timestamp}")
+
 
 def find_and_claim_rfid(config, session_id: str, start_timestamp: str):
     """
     Finds the single unclaimed RFID tag closest to the start_timestamp 
-    within a window of -1 minute to +1 minute.
+    within a window of -65 seconds to +65 seconds.
     """
-    db_path = _get_queue_db_path(config)
 
     start_datetime = datetime.fromisoformat(start_timestamp)
 
     # Define the total window for a valid pairing
     min_window = (start_datetime - timedelta(seconds=65)).isoformat()
-    max_window = (start_datetime + timedelta(seconds=60)).isoformat()
+    max_window = (start_datetime + timedelta(seconds=65)).isoformat()
     
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # We use julianday() to calculate the absolute difference in time.
-        # This finds the 'nearest' scan regardless of if it was before or after.
-        cursor.execute("""
-            SELECT id, tag, timestamp,
-            ABS(julianday(timestamp) - julianday(?)) as time_diff
-            FROM rfid_event 
-            WHERE claimed_by_session_id IS NULL 
-            AND timestamp >= ? AND timestamp <= ?
-            ORDER BY time_diff ASC LIMIT 1
-        """, (start_timestamp, min_window, max_window))
-        
-        row = cursor.fetchone()
+    # Try to pair RFID up to 4 times (total wait: ~6 seconds)
+    for attempt in range(4):
+        with get_db_connection(config) as conn:
+            cursor = conn.cursor()
 
-        if row:
-            logging.info(f"RFID Match: {row['tag']} found for {session_id} (time difference: {round(row['time_diff']*86400, 2)}s)")
-
-            # Mark this tag as used so the other charging point doesn't steal it
+            # We use julianday() to calculate the absolute difference in time.
+            # This finds the 'nearest' scan regardless of if it was before or after.
             cursor.execute("""
-                UPDATE rfid_event 
-                SET claimed_by_session_id = ? 
-                WHERE id = ?
-            """, (session_id, row['id']))
+                SELECT id, tag, timestamp,
+                ABS(julianday(timestamp) - julianday(?)) as time_diff
+                FROM rfid_event 
+                WHERE claimed_by_session_id IS NULL 
+                AND timestamp >= ? AND timestamp <= ?
+                ORDER BY time_diff ASC LIMIT 1
+            """, (start_timestamp, min_window, max_window))
+
+            row = cursor.fetchone()
+
+            if row:
+                diff_sec = round(row['time_diff'] * 86400, 2)
+                logging.info(f"RFID Match: {row['tag']} found for {session_id} (time difference: {diff_sec}s)")
+
+                # Mark this tag as used so the other charging point doesn't steal it
+                cursor.execute("""
+                    UPDATE rfid_event 
+                    SET claimed_by_session_id = ? 
+                    WHERE id = ?
+                """, (session_id, row['id']))
+
+                return row['tag'], row['timestamp']
             
-            return row['tag'], row['timestamp']
+        # If we didn't find anything, wait 2 seconds before the next attempt, but only if we aren't on the last attempt.
+        if attempt < 3:
+            time.sleep(2)
             
     return None, None
 
@@ -407,15 +436,12 @@ def add_to_queue(config, charging_session_id: str, device_uid: str, payload: Dic
     Returns:
         None
     """
-
-    # Get the database full file path
-    db_path = _get_queue_db_path(config)
     
     # Convert payload dict to JSON string for storage
     payload_json = json.dumps(payload)
     current_time = datetime.now().isoformat()
 
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(config) as conn:
         cursor = conn.cursor()
 
         # Check if a session with this charging_session_id and type already exists
@@ -459,10 +485,7 @@ def get_pending_queue_items(config) -> List[Dict]:
         attempts, last_attempt_at, and queue_db_id). Returns an empty list if no items.
     """
 
-    # Get the database full file path
-    db_path = _get_queue_db_path(config)
-
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(config) as conn:
         cursor = conn.cursor()
 
         # Fetch items that are 'pending' or 'failed'. The attempt limit is removed.
@@ -480,16 +503,16 @@ def get_pending_queue_items(config) -> List[Dict]:
     for row in rows:
         try:
             items.append({
-                "queue_db_id": row[6], # The internal SQLite primary key
-                "charging_session_id": row[0],
-                "device_uid": row[1],
-                "payload": json.loads(row[2]), # Convert JSON string back to dict
-                "type": row[3],
-                "attempts": row[4],
-                "last_attempt_at": row[5]
+                "queue_db_id": row['id'],
+                "charging_session_id": row['charging_session_id'],
+                "device_uid": row['device_uid'],
+                "payload": json.loads(row['payload']), # Convert JSON string back to dict
+                "type": row['type'],
+                "attempts": row['attempts'],
+                "last_attempt_at": row['last_attempt_at']
             })
         except json.JSONDecodeError:
-            logging.error(f"Error decoding JSON payload for queue item: {row[2]}")
+            logging.error(f"Error decoding JSON payload for queue item: {row['id']}")
 
     return items
 
@@ -507,11 +530,10 @@ def update_queue_item_status(config, queue_db_id: int, status: str, increment_at
     Returns:
         None
     """
-    db_path = _get_queue_db_path(config)
 
     current_time = datetime.now().isoformat()
 
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(config) as conn:
         cursor = conn.cursor()
 
         if increment_attempts:
@@ -540,10 +562,9 @@ def get_active_session_from_queue(config, device_uid: str) -> Optional[Dict[str,
         A dictionary containing the 'charging_session_id' and the full 'payload'
         of the active session if one is found, otherwise None.
     """
-    db_path = _get_queue_db_path(config)
 
     try:
-        with sqlite3.connect(db_path) as conn:
+        with get_db_connection(config) as conn:
             cursor = conn.cursor()
 
             # Find the latest "start" event for this device. We assume the latest one is the active one.
@@ -554,16 +575,14 @@ def get_active_session_from_queue(config, device_uid: str) -> Optional[Dict[str,
                 WHERE device_uid = ? AND type = 'start'
                 ORDER BY created_at DESC
                 LIMIT 1
-            """, (device_uid))
+            """, (device_uid,))
 
             row = cursor.fetchone()
 
             if row:
-                charging_session_id, payload_json = row
-
                 return {
-                    "charging_session_id": charging_session_id,
-                    "payload": json.loads(payload_json)
+                    "charging_session_id": row['charging_session_id'],
+                    "payload": json.loads(row['payload'])
                 }
             
             # Return None if no row was found
@@ -584,17 +603,30 @@ def get_active_session_from_queue(config, device_uid: str) -> Optional[Dict[str,
 #######################################################
 
 
-def update_controller_telemetry(config, device_uid: str, payload: Dict[str, Any]) -> None:
-    db_path = _get_queue_db_path(config)
+def update_controller_telemetry(config, device_uid: str, payload_json: str) -> None:
+    """
+    Persists the latest technical telemetry state for a charging controller into 
+    the local SQLite database. Utilizes a flexible JSON payload column to ensure 
+    data persistence remains compatible with future controller firmware updates 
+    without requiring database schema migrations.
+
+    Args:
+        config: Dictionary containing configuration values, specifically file paths.
+        device_uid: The unique identifier of the charging controller.
+        payload_json: A stringified JSON object containing the unified telemetry data.
+    Returns:
+        None
+    """
+
     current_time = datetime.now().isoformat()
 
-    with sqlite3.connect(db_path) as conn:
+    with get_db_connection(config) as conn:
         cursor = conn.cursor()
 
         cursor.execute("""
             INSERT OR REPLACE INTO controller_telemetry (device_uid, payload, updated_at)
             VALUES (?, ?, ?)
-        """, (device_uid, payload, current_time))
+        """, (device_uid, payload_json, current_time))
 
 
 #######################################################
@@ -619,16 +651,14 @@ def get_last_known_controller_state(device_uid: str, config) -> Optional[str]:
         The last known charging state of the charging controller - 'connected' or 'disconnected' if successful, None if failed
     """
 
-    db_path = _get_queue_db_path(config)
-
     try:
-        with sqlite3.connect(db_path) as conn:
+        with get_db_connection(config) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT status FROM device_status WHERE device_uid = ?", (device_uid,))
             result = cursor.fetchone()
 
         if result:
-            return result[0] # result will be a tuple, e.g., ('connected',)
+            return result['status']
         
         return None # No entry found for this device UID
     
@@ -664,11 +694,10 @@ def set_last_known_state(device_uid: str, state: str, config) -> None:
         logging.warning(f"Incorrect device state provided for {device_uid}: {state}")
         return
 
-    db_path = _get_queue_db_path(config)
     current_time = datetime.now().isoformat()
 
     try:
-        with sqlite3.connect(db_path) as conn:
+        with get_db_connection(config) as conn:
             cursor = conn.cursor()
 
             # Use INSERT OR REPLACE to create and optionally delete the existing record
