@@ -56,6 +56,17 @@ STOP_EVENT = threading.Event()
 TELEMETRY_LOCK = threading.Lock()
 telemetry_buffer: Dict[str, Any] = {}
 
+DEVICE_LOCKS: Dict[str, threading.Lock] = {}
+DEVICE_LOCKS_REGISTRY_LOCK = threading.Lock()
+
+def get_device_lock(device_uid: str) -> threading.Lock:
+    """Returns (and lazily creates) a per-device mutex."""
+    with DEVICE_LOCKS_REGISTRY_LOCK:
+        if device_uid not in DEVICE_LOCKS:
+            DEVICE_LOCKS[device_uid] = threading.Lock()
+
+        return DEVICE_LOCKS[device_uid]
+
 # Thread pools
 event_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="EV-Event")
 
@@ -64,7 +75,7 @@ MQTT_HOST = config["Mqtt"]["Host"]
 MQTT_PORT = int(config["Mqtt"]["Port"])
 
 REST_API_HOST = config["RestApi"]["Host"]
-REST_API_PORT = config["RestApi"]["Port"]
+REST_API_PORT = int(config["RestApi"]["Port"])
 
 EMM_HOST = config["EmmSettings"]["Host"]
 EMM_API_KEY = config["EmmSettings"]["ApiKey"]
@@ -82,8 +93,8 @@ TOPIC_IEC_61851_STATE = "charging_controllers/+/data/iec_61851_state"
 TOPIC_ENERGY = "charging_controllers/+/data/energy"
 TOPIC_RFID = "charging_controllers/+/data/rfid"
 
-# Script start timestamp
-NOW = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+# Helper function for getting the current timestamp
+def ts() -> str: return datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 ################################################
 ############# END CONFIG & GLOBALS #############
@@ -294,7 +305,7 @@ def telemetry_heartbeat_worker():
 ##################################################
 
 
-def handle_vehicle_event_logic(vehicle_state: str, topic: str) -> None:
+def handle_vehicle_event_logic(vehicle_state: str, topic: str, message_ts: str) -> None:
     """
     Perfoms the heavy lifting operations of vehicle status change - REST API, DB operations, RFID pairing.
     This functions runs in its own thread seperate from the MQTT loop.
@@ -302,12 +313,11 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str) -> None:
     Args:
         vehicle_state: The IEC 61851 state received in the MQTT payload.
         topic: The MQTT message topic.
+        message_ts: The MQTT message arrival ISO timestamp.
 
     Returns:
         None
     """
-
-    connected_vehicle_states = ["B1", "B2", "C1", "C2", "D1", "D2"]
 
     # Extract device_uid from the message topic
     pattern = r"/([^/]+)/"
@@ -318,32 +328,48 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str) -> None:
         logging.error(f"Could not extract device UID from topic: {topic}, skipping")
         return
     
-    # Check if this is a critical state transition
-    last_known_state = get_last_known_controller_state(device_uid, config)
-    is_connected_event = vehicle_state in connected_vehicle_states
-
-    # If the device is unknown, baseline it in the database
-    if last_known_state is None:
-        logging.info(f"First time seeing device {device_uid}. Initializing baseline state")
- 
-        if not is_connected_event:
-            # If currently connected, assume it was disconnected so we start a session
-            set_last_known_state(device_uid, "disconnected", config)
-            return 
-        else:
-            # If currently disconnected, just save it and return
-            last_known_state = "disconnected"
-
-    # A session starts when the state becomes 'connected' AND the previous state was 'disconnected' or unknown.
-    is_new_session_start = is_connected_event and last_known_state == "disconnected"
+    # Lock the device (controller) to prevent race conditions on state updates
+    device_lock = get_device_lock(device_uid)
     
-    # A session ends when the state is NOT 'connected' AND the previous state was 'connected'.
-    is_session_end = not is_connected_event and last_known_state == "connected"
+    with device_lock:
+        # Check if this is a critical state transition
+        connected_vehicle_states = ["B1", "B2", "C1", "C2", "D1", "D2"]
+        charging_vehicle_states = ["C1", "C2"]
 
-    # If this is just an intermediate state change (e.g., B1 -> B2), ignore it to save resources.
-    if not is_new_session_start and not is_session_end:
-        logging.debug(f"Ignoring intermediate state change '{vehicle_state}' for device {device_uid}")
-        return
+        is_connected_event = vehicle_state in connected_vehicle_states
+        is_charging_event = vehicle_state in charging_vehicle_states
+
+        last_vehicle_state = get_last_known_controller_state(device_uid, config)
+
+        # If the device is unknown, baseline it in the database
+        if last_vehicle_state is None:
+            logging.info(f"First time seeing device {device_uid}. Initializing baseline state")
+    
+            if is_connected_event:
+                # Vehicle already connected on first sight — baseline as connected, don't start a new session
+                set_last_known_state(device_uid, "connected", config)
+            else:
+                # Vehicle not connected — baseline as disconnected
+                set_last_known_state(device_uid, "disconnected", config)
+
+            return
+
+        is_new_session_start = is_connected_event and last_vehicle_state == "disconnected"
+        is_power_flow_start = is_charging_event and last_vehicle_state == "connected"
+        is_session_end = not is_connected_event and last_vehicle_state == "connected"
+
+        # If this is just an intermediate state change (e.g. B1 -> B2, C1 -> C2), ignore it to save resources.
+        if not is_new_session_start and not is_power_flow_start and not is_session_end:
+            logging.debug(f"Ignoring intermediate state change '{vehicle_state}' for device {device_uid}")
+            return
+        
+        # For a session start, mark connected immediately so any subsequent
+        # event queued behind this lock sees the updated state.
+        if is_new_session_start:
+            set_last_known_state(device_uid, "connected", config)
+
+        elif is_session_end:
+            set_last_known_state(device_uid, "disconnected", config)
 
     # Get the starting energy data from the API
     energy_url = f"http://{REST_API_HOST}:{REST_API_PORT}/api/v1.0/charging-controllers/{device_uid}/data?param_list=energy"
@@ -363,17 +389,16 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str) -> None:
     charging_point_url = f"http://{REST_API_HOST}:{REST_API_PORT}/api/v1.0/charging-points"
     charging_point_id, charging_point_name = get_charging_point(device_uid, charging_point_url)
 
-    # New charging session started
+    # =============================
+    # Scenario 1: EV got plugged-in
     if is_new_session_start:
-        print(f"[{NOW}] EV connected! deviceUid: {device_uid}")
+        print(f"[{ts()}] EV connected! deviceUid: {device_uid}")
         logging.info(f"EV connected to deviceUid: {device_uid}")
-
-        last_known_state = get_last_known_controller_state(device_uid, config)
 
         charging_session_id = str(uuid.uuid4())
 
         # Look in our database for an RFID scanned just before this plug-in
-        rfid_tag, rfid_timestamp = find_and_claim_rfid(config, charging_session_id, energy_data["energy"]["timestamp"])
+        rfid_tag, rfid_ts = find_and_claim_rfid(config, charging_session_id, message_ts)
 
         data_to_save = {
             "type": "start",
@@ -381,25 +406,57 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str) -> None:
             "deviceUid": device_uid,
             "chargingPointName": charging_point_name,
             "rfidTag": rfid_tag,
-            "rfidTimestamp": rfid_timestamp,
+            "rfidTimestamp": rfid_ts,
             "startRealPowerWh": energy_data["energy"]["energy_real_power"]["value"],
             "endRealPowerWh": None,
             "consumptionWh": None,
-            "startTimestamp": energy_data["energy"]["timestamp"],
+            "startTimestamp": message_ts,
+            "startEnergyTimestamp": energy_data["energy"]["timestamp"],
             "endTimestamp": None,
+            "endEnergyTimestamp": None,
             "duration": None,
             "iec61851State": vehicle_state
         }
 
         # Add to SQLite queue for reliable transmission
         add_to_queue(config, charging_session_id, device_uid, data_to_save, "start")
-
-        set_last_known_state(device_uid, "connected", config)
         logging.info(f"Charging session {charging_session_id} started and queued for device {device_uid}")
 
-    # Charging session ended
+    # =========================================================
+    # Scenario 2: EV started charging (B -> C state transition)
+    elif is_power_flow_start:
+        # Check if we have an active session that is missing an RFID
+        active_session = get_active_session_from_queue(config, device_uid)
+
+        if active_session:
+            charging_session_id = active_session["charging_session_id"]
+            start_payload = active_session["payload"]
+
+            # Only try to claim RFID if the session doesn't have one yet
+            if not start_payload.get("rfidTag"):
+                # We use the message_ts since the user could have had the EV plugged-in long before using RFID card
+                rfid_tag, rfid_ts = find_and_claim_rfid(config, charging_session_id, message_ts)
+
+                if rfid_tag and rfid_ts:
+                    # Create a payload and save it to the database queue
+                    data_to_save = {
+                        "type": "rfid",
+                        "id": charging_session_id,
+                        "deviceUid": device_uid,
+                        "chargingPointName": charging_point_name,
+                        "rfidTag": rfid_tag,
+                        "rfidTimestamp": rfid_ts,
+                        "iec61851State": vehicle_state
+                    }
+
+                    add_to_queue(config, charging_session_id, device_uid, data_to_save, "rfid")
+                    logging.info(f"RFID {rfid_tag} found for session {charging_session_id} and queued for device {device_uid}")
+
+
+    # ============================
+    # Scenario 3: EV got unplugged
     elif is_session_end:
-        print(f"[{NOW}] EV disconnected! deviceUid: {device_uid}")
+        print(f"[{ts()}] EV disconnected! deviceUid: {device_uid}")
         logging.info(f"EV disconnected from deviceUid: {device_uid}")
 
         # Find the active session from the queue to link the 'end' event.
@@ -413,32 +470,28 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str) -> None:
             
         try:
             # Extract start-of-session data from the payload retrieved from the queue
+            charging_session_id = active_session["charging_session_id"]
             start_payload = active_session["payload"]
-            charging_session_id = start_payload["id"]
+
             start_real_power = start_payload["startRealPowerWh"]
-
-            start_timestamp = start_payload["startTimestamp"]
-            end_timestamp = energy_data["energy"]["timestamp"]
-
-            start_datetime = datetime.fromisoformat(start_timestamp)
-            end_datetime = datetime.fromisoformat(end_timestamp)
+            start_ts = start_payload["startTimestamp"]
 
             # Calculate the session duration and consumption, make sure it's not negative
-            duration = max(0, (end_datetime - start_datetime).total_seconds())
-            consumption = max(0, energy_data["energy"]["energy_real_power"]["value"] - start_real_power)
+            start_datetime = datetime.fromisoformat(start_ts)
+            end_datetime = datetime.fromisoformat(message_ts)
+            duration = int(round(max(0, round((end_datetime - start_datetime).total_seconds()))))
+
+            current_energy = energy_data["energy"]["energy_real_power"]["value"]
+            consumption = int(round(max(0, current_energy - start_real_power)))
 
             # Prefer RFID from current start event
-            final_rfid_tag = start_payload.get("rfidTag") # Use .get for safety
-            final_rfid_timestamp = start_payload.get("rfidTimestamp")
+            final_rfid_tag = start_payload.get("rfidTag")
+            final_rfid_ts = start_payload.get("rfidTimestamp")
 
             # If we didn't have a tag at the start, check the buffer again
             # for any tag scanned DURING the session (Plug -> Scan scenario)
             if not final_rfid_tag:
-                final_rfid_tag, final_rfid_timestamp = find_and_claim_rfid(
-                    config, 
-                    charging_session_id, 
-                    start_timestamp
-                )
+                final_rfid_tag, final_rfid_ts = find_and_claim_rfid(config, charging_session_id, start_ts)
 
             data_to_update = {
                 "type": "end",
@@ -446,21 +499,19 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str) -> None:
                 "deviceUid": device_uid,
                 "chargingPointName": start_payload.get("chargingPointName"),
                 "rfidTag": final_rfid_tag,
-                "rfidTimestamp": final_rfid_timestamp,
+                "rfidTimestamp": final_rfid_ts,
                 "startRealPowerWh": start_real_power,
                 "endRealPowerWh": energy_data["energy"]["energy_real_power"]["value"],
                 "consumptionWh": consumption,
-                "startTimestamp": start_timestamp,
-                "endTimestamp": energy_data["energy"]["timestamp"],
+                "startTimestamp": start_payload.get("startTimestamp"),
+                "startEnergyTimestamp": start_payload.get("startEnergyTimestamp"),
+                "endTimestamp": message_ts,
+                "endEnergyTimestamp": energy_data["energy"]["timestamp"],
                 "duration": duration,
                 "iec61851State": vehicle_state
             }
 
-            # Add/Update to SQLite queue for reliable transmission
-            # Here, we pass the full, updated session data.
             add_to_queue(config, charging_session_id, device_uid, data_to_update, "end")
-            set_last_known_state(device_uid, "disconnected", config)
-
             logging.info(f"Charging session {charging_session_id} ended and queued for device {device_uid}")
 
         except (ValueError, KeyError) as e:
@@ -487,9 +538,10 @@ def on_vehicle_status_changed(client: mqtt.Client, userdata: Any, message: mqtt.
         logging.info(f"Message received from topic {message.topic}: {vehicle_state}")
 
         topic = message.topic
+        message_ts = datetime.now().replace(microsecond=0).isoformat()
         
         # Offload the slow logic to the background
-        event_executor.submit(handle_vehicle_event_logic, vehicle_state, topic)
+        event_executor.submit(handle_vehicle_event_logic, vehicle_state, topic, message_ts)
         
     except Exception as e:
         logging.error(f"Error submitting vehicle event to executor: {e}")
@@ -500,15 +552,13 @@ def send_queued_data_worker():
     max_sleep = int(config["AppSettings"].get("MaxQueueCheckIntervalSeconds", 300))
     current_sleep = base_sleep
 
-    while not STOP_EVENT.is_set():
+    while not STOP_EVENT.wait(timeout=current_sleep):
         try:
             pending_items = get_pending_queue_items(config)
 
             if not pending_items:
                 # Queue is empty, sleep longer next time
-                time.sleep(current_sleep)
                 current_sleep = min(current_sleep * 2, max_sleep)
-
                 continue
 
             # If we get here, work was found. Reset the sleep interval for the next idle cycle.
@@ -526,9 +576,9 @@ def send_queued_data_worker():
                 attempts = item["attempts"]
 
                 # Add the charger's current time to the payload at the moment of sending
-                item["payload"]["sentTimestamp"] = datetime.now().isoformat()
+                item["payload"]["sentTimestamp"] = datetime.now().replace(microsecond=0).isoformat()
 
-                logging.info(f"Attempting to send queued item (ID: {charging_session_id}, Type: {session_type}, Attempts: {attempts}) for device {device_uid}")
+                logging.info(f"Attempting to send queued item (ID: {charging_session_id}, Type: {session_type}, Attempts: {attempts}) for device {device_uid}.")
 
                 target_url = f"{EMM_HOST}{EMM_SESSION_ENDPOINT}"
 
@@ -543,24 +593,30 @@ def send_queued_data_worker():
                     data=compressed_data,
                 )
 
-                if emm_response:
-                    logging.info(f"Successfully sent queued item (ID: {charging_session_id}, Type: {session_type}) for device {device_uid} to EMM")
+                if emm_response is not None and emm_response.status_code < 400:
+                    logging.info(f"Successfully sent queued item (ID: {charging_session_id}, Type: {session_type}) for device {device_uid} to EMM.")
                     update_queue_item_status(config, queue_db_id, "sent")
+
+                elif emm_response is not None and emm_response.status_code == 404:
+                    # If we got 404 response from EMM we stop resending the item
+                    logging.error(f"Server returned 404 for queued item (ID: {charging_session_id}, Type: {session_type}) for device {device_uid}. Discarding this item to unblock queue.")
+                    update_queue_item_status(config, queue_db_id, "failed_unrecoverable")
+
                 else:
-                    logging.warning(f"Failed to send queued item (ID: {charging_session_id}, Type: {session_type}) for device {device_uid} to EMM")
+                    # For regular network errors or 500 errors keep trying
+                    logging.warning(f"Failed to send queued item (ID: {charging_session_id}, Type: {session_type}) for device {device_uid} to EMM.")
                     update_queue_item_status(config, queue_db_id, "failed", increment_attempts=True)
 
                 # Add a small delay between sending items to avoid hammering the API
-                time.sleep(1)
+                if STOP_EVENT.wait(timeout=1):
+                    break
 
             # After processing a batch, wait for the base interval before checking again.
-            time.sleep(base_sleep)
+            if STOP_EVENT.wait(timeout=base_sleep):
+                break
 
         except Exception as e:
             logging.error(f"Error in session sender thread: {e}", exc_info=True)
-
-            # On error, wait for the base interval before retrying
-            time.sleep(base_sleep)
 
     logging.info("Sender thread stopped")
 
@@ -584,7 +640,7 @@ def on_rfid_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessag
         client: The MQTT client instance.
         userdata: The private user data as set in Client() or userdata_set().
         message: An MQTTMessage object containing topic, payload, qos, retain, and mid.
-                 The payload contains the IEC 61851 state of the charging controller.
+                 The payload contains the RFID tag and timestamp.
     Returns:
         None
     """
@@ -595,11 +651,11 @@ def on_rfid_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessag
         # Parse the MQTT message that's in this format: {"tag": "XXXXX", "timestamp": "2026-03-13T08:36:47"}
         data = json.loads(message.payload.decode("utf-8"))
 
-        tag = data.get("tag")
-        timestamp = data.get("timestamp")
+        rfid_tag = data.get("tag")
+        rfid_ts = data.get("timestamp")
 
-        if tag and timestamp:
-            save_rfid_event(config, tag, timestamp)
+        if rfid_tag and rfid_ts:
+            save_rfid_event(config, rfid_tag, rfid_ts)
 
         else:
             logging.warning(f"Received incomplete RFID data on {message.topic}: {data}")
@@ -656,7 +712,7 @@ def on_connect(client: mqtt.Client, userdata: Any, flags, rc: int):
 
 
 if __name__ == "__main__":
-    print(f"[{NOW}] Script started")
+    print(f"[{ts()}] Script started")
 
     initialize_queue_db(config)
     initialize_telemetry_metadata()

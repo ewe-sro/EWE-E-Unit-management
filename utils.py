@@ -1,9 +1,12 @@
-from typing import Dict, List, Tuple, Optional, Any
-from datetime import datetime, timedelta
 import os
 import time
 
-now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Optional, Any
+
+
+# Helper function for getting the current timestamp
+def timestamp() -> str: return datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 #######################################
 ############# LOAD CONFIG #############
@@ -36,8 +39,8 @@ def load_config() -> Optional[configparser.ConfigParser]:
 
     else:
         # If the config file wasn't found terminate the script
-        print(f"[{now}] Config file not found, expected filename: {config_path}")
-        print(f"[{now}] Terminating the script")
+        print(f"[{timestamp()}] Config file not found, expected filename: {config_path}")
+        print(f"[{timestamp()}] Terminating the script")
         exit()
 
 
@@ -158,7 +161,6 @@ def send_request(
             logging.error(
                 f"HTTP {response.status_code} error occurred: {response.text}. URL: {url}"
             )
-            return None
 
         # Return the response
         return response
@@ -295,11 +297,14 @@ def initialize_queue_db(config) -> None:
     db_path = _get_queue_db_path(config)
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
+    # Enable WAL mode for concurrent database writes
+    raw_conn = sqlite3.connect(db_path, timeout=20)
+    raw_conn.execute("PRAGMA journal_mode=WAL;")
+    raw_conn.commit()
+    raw_conn.close()
+
     with get_db_connection(config) as conn:
         cursor = conn.cursor()
-
-        # Enable WAL mode for concurrent database writes
-        cursor.execute("PRAGMA journal_mode=WAL;")
 
         # 'charging_session' database table
         cursor.execute("""
@@ -315,6 +320,14 @@ def initialize_queue_db(config) -> None:
                 created_at TEXT NOT NULL,
                 UNIQUE(charging_session_id, type)
             )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_charging_session_id ON charging_session (charging_session_id);
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_charging_session_type ON charging_session (charging_session_id, type);
         """)
 
         # 'rfid_event' database table
@@ -371,22 +384,17 @@ def save_rfid_event(config, tag: str, timestamp: str):
             logging.info(f"Saved RFID scan to database: {tag} at {timestamp}")
 
 
-def find_and_claim_rfid(config, session_id: str, start_timestamp: str):
+def find_and_claim_rfid(config, session_id: str, start_ts: str):
     """
     Finds the single unclaimed RFID tag closest to the start_timestamp 
     within a window of -65 seconds to +65 seconds.
     """
-
-    start_datetime = datetime.fromisoformat(start_timestamp)
-
-    # Define the total window for a valid pairing
-    min_window = (start_datetime - timedelta(seconds=65)).isoformat()
-    max_window = (start_datetime + timedelta(seconds=65)).isoformat()
     
     # Try to pair RFID up to 4 times (total wait: ~6 seconds)
     for attempt in range(4):
         with get_db_connection(config) as conn:
             cursor = conn.cursor()
+            conn.execute("BEGIN IMMEDIATE")
 
             # We use julianday() to calculate the absolute difference in time.
             # This finds the 'nearest' scan regardless of if it was before or after.
@@ -395,9 +403,10 @@ def find_and_claim_rfid(config, session_id: str, start_timestamp: str):
                 ABS(julianday(timestamp) - julianday(?)) as time_diff
                 FROM rfid_event 
                 WHERE claimed_by_session_id IS NULL 
-                AND timestamp >= ? AND timestamp <= ?
+                AND datetime(timestamp) >= datetime(?, '-65 seconds')
+                AND datetime(timestamp) <= datetime(?, '+65 seconds')
                 ORDER BY time_diff ASC LIMIT 1
-            """, (start_timestamp, min_window, max_window))
+            """, (start_ts, start_ts, start_ts))
 
             row = cursor.fetchone()
 
@@ -409,10 +418,12 @@ def find_and_claim_rfid(config, session_id: str, start_timestamp: str):
                 cursor.execute("""
                     UPDATE rfid_event 
                     SET claimed_by_session_id = ? 
-                    WHERE id = ?
+                    WHERE id = ? AND claimed_by_session_id IS NULL
                 """, (session_id, row['id']))
 
-                return row['tag'], row['timestamp']
+                if cursor.rowcount == 1:
+                    conn.commit()
+                    return row['tag'], row['timestamp']
             
         # If we didn't find anything, wait 2 seconds before the next attempt, but only if we aren't on the last attempt.
         if attempt < 3:
@@ -567,22 +578,39 @@ def get_active_session_from_queue(config, device_uid: str) -> Optional[Dict[str,
         with get_db_connection(config) as conn:
             cursor = conn.cursor()
 
-            # Find the latest "start" event for this device. We assume the latest one is the active one.
-            # This is more robust than checking status, as an "end" event might not have been created yet.
+            # Find the last active charging session for a controller - latest session 'start' event that has no 'end' event
             cursor.execute("""
-                SELECT charging_session_id, payload
-                FROM charging_session
-                WHERE device_uid = ? AND type = 'start'
-                ORDER BY created_at DESC
+                SELECT cs.charging_session_id, cs.payload as start_payload,
+                        (SELECT payload FROM charging_session cr 
+                        WHERE cr.charging_session_id = cs.charging_session_id 
+                        AND cr.type = 'rfid' LIMIT 1) as rfid_payload
+                FROM charging_session cs
+                WHERE cs.device_uid = ?
+                  AND cs.type = 'start'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM charging_session ce
+                      WHERE ce.charging_session_id = cs.charging_session_id
+                        AND ce.type = 'end'
+                  )
+                ORDER BY cs.created_at DESC
                 LIMIT 1
             """, (device_uid,))
 
             row = cursor.fetchone()
 
             if row:
+                charging_session_id = row['charging_session_id']
+                payload = json.loads(row['start_payload'])
+
+                # If a late RFID event was found (plug-in then scan) in the queue, merge it into our working payload
+                if row['rfid_payload']:
+                    rfid_data = json.loads(row['rfid_payload'])
+                    payload['rfidTag'] = rfid_data.get('rfidTag')
+                    payload['rfidTimestamp'] = rfid_data.get('rfidTimestamp')
+
                 return {
-                    "charging_session_id": row['charging_session_id'],
-                    "payload": json.loads(row['payload'])
+                    "charging_session_id": charging_session_id,
+                    "payload": payload
                 }
             
             # Return None if no row was found
