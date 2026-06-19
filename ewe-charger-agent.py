@@ -397,8 +397,18 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str, message_ts: str) 
 
         charging_session_id = str(uuid.uuid4())
 
-        # Look in our database for an RFID scanned just before this plug-in
-        rfid_tag, rfid_ts = find_and_claim_rfid(config, charging_session_id, message_ts)
+        rfid_tag = None
+        rfid_ts = None
+        power_flow_start_processed = False
+
+        # If the starting state is already a charging event (C1/C2), the user scanned their card BEFORE plugging in.
+        # We can safely claim the pre-authorized RFID immediately at start.
+        if is_charging_event:
+            rfid_tag, rfid_ts = find_and_claim_rfid(config, charging_session_id, message_ts, unclaim_current=False)
+
+            if rfid_tag and rfid_ts:
+                logging.info(f"Pre-authorized RFID {rfid_tag} found at plug-in start.")
+                power_flow_start_processed = True
 
         data_to_save = {
             "type": "start",
@@ -415,7 +425,8 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str, message_ts: str) 
             "endTimestamp": None,
             "endEnergyTimestamp": None,
             "duration": None,
-            "iec61851State": vehicle_state
+            "iec61851State": vehicle_state,
+            "powerFlowStartProcessed": power_flow_start_processed
         }
 
         # Add to SQLite queue for reliable transmission
@@ -432,14 +443,23 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str, message_ts: str) 
             charging_session_id = active_session["charging_session_id"]
             start_payload = active_session["payload"]
 
-            # Only try to claim RFID if the session doesn't have one yet
-            if not start_payload.get("rfidTag"):
-                # We use the message_ts since the user could have had the EV plugged-in long before using RFID card
-                rfid_tag, rfid_ts = find_and_claim_rfid(config, charging_session_id, message_ts)
+             # Ensure we only process the power flow start once per session to save CPU and DB resources
+            if not start_payload.get("powerFlowStartProcessed"):
+                # We call find_and_claim_rfid with unclaim_current=True. 
+                # This ensures any previously misallocated card from plug-in is released,
+                # and we pair the true authorizing card scanned closest to the transition.
+                rfid_tag, rfid_ts = find_and_claim_rfid(config, charging_session_id, message_ts, unclaim_current=True)
 
                 if rfid_tag and rfid_ts:
+                    # Update the 'start' event in the local SQLite queue
+                    start_payload["rfidTag"] = rfid_tag
+                    start_payload["rfidTimestamp"] = rfid_ts
+                    start_payload["powerFlowStartProcessed"] = True
+
+                    add_to_queue(config, charging_session_id, device_uid, start_payload, "start")
+
                     # Create a payload and save it to the database queue
-                    data_to_save = {
+                    rfid_payload = {
                         "type": "rfid",
                         "id": charging_session_id,
                         "deviceUid": device_uid,
@@ -449,8 +469,13 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str, message_ts: str) 
                         "iec61851State": vehicle_state
                     }
 
-                    add_to_queue(config, charging_session_id, device_uid, data_to_save, "rfid")
+                    add_to_queue(config, charging_session_id, device_uid, rfid_payload, "rfid")
                     logging.info(f"RFID {rfid_tag} found for session {charging_session_id} and queued for device {device_uid}")
+
+                else:
+                    # Mark as processed even if no card was found (e.g. autocharge/free sites)
+                    start_payload["powerFlowStartProcessed"] = True
+                    add_to_queue(config, charging_session_id, device_uid, start_payload, "start")
 
 
     # ============================
@@ -479,7 +504,7 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str, message_ts: str) 
             # Calculate the session duration and consumption, make sure it's not negative
             start_datetime = datetime.fromisoformat(start_ts)
             end_datetime = datetime.fromisoformat(message_ts)
-            duration = int(round(max(0, round((end_datetime - start_datetime).total_seconds()))))
+            duration = int(round(max(0, (end_datetime - start_datetime).total_seconds())))
 
             current_energy = energy_data["energy"]["energy_real_power"]["value"]
             consumption = int(round(max(0, current_energy - start_real_power)))
@@ -491,7 +516,7 @@ def handle_vehicle_event_logic(vehicle_state: str, topic: str, message_ts: str) 
             # If we didn't have a tag at the start, check the buffer again
             # for any tag scanned DURING the session (Plug -> Scan scenario)
             if not final_rfid_tag:
-                final_rfid_tag, final_rfid_ts = find_and_claim_rfid(config, charging_session_id, start_ts)
+                final_rfid_tag, final_rfid_ts = find_and_claim_rfid(config, charging_session_id, start_ts, unclaim_current=False)
 
             data_to_update = {
                 "type": "end",

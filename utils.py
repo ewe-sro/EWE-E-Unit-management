@@ -384,10 +384,11 @@ def save_rfid_event(config, tag: str, timestamp: str):
             logging.info(f"Saved RFID scan to database: {tag} at {timestamp}")
 
 
-def find_and_claim_rfid(config, session_id: str, start_ts: str):
+def find_and_claim_rfid(config, session_id: str, start_ts: str, unclaim_current: bool = False):
     """
     Finds the single unclaimed RFID tag closest to the start_timestamp 
     within a window of -65 seconds to +65 seconds.
+    Optionally releases any previously claimed RFID tags for this session first.
     """
     
     # Try to pair RFID up to 4 times (total wait: ~6 seconds)
@@ -395,6 +396,16 @@ def find_and_claim_rfid(config, session_id: str, start_ts: str):
         with get_db_connection(config) as conn:
             cursor = conn.cursor()
             conn.execute("BEGIN IMMEDIATE")
+
+            # Release previous claims during the first attempt if requested
+            if unclaim_current and attempt == 0:
+                cursor.execute("""
+                    UPDATE rfid_event 
+                    SET claimed_by_session_id = NULL 
+                    WHERE claimed_by_session_id = ?
+                """, (session_id,))
+                
+                logging.info(f"Released previous RFID claims for session {session_id} in local database")
 
             # We use julianday() to calculate the absolute difference in time.
             # This finds the 'nearest' scan regardless of if it was before or after.
