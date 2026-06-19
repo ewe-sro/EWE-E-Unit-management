@@ -47,6 +47,6 @@ Následně získá aktuální nastavení nabíjecího bodu a tato nastavení ode
 ### Manuální spuštění skriptů bez nutnosti restartu
 
 ```
-nohup /usr/bin/python3 /data/user-app/charging_data/ewe-charger-agenty.py &
+nohup /usr/bin/python3 /data/user-app/charging_data/ewe-charger-agent.py &
 nohup /usr/bin/python3 /data/user-app/charging_data/sync_settings.py &
 ```
