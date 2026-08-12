@@ -50,3 +50,15 @@ Následně získá aktuální nastavení nabíjecího bodu a tato nastavení ode
 nohup /usr/bin/python3 /data/user-app/charging_data/ewe-charger-agent.py &
 nohup /usr/bin/python3 /data/user-app/charging_data/sync_settings.py &
 ```
+
+### Lokální vývoj a testování (firmware 1.9.1+)
+
+Od verze firmware CHARX OS **1.9.1** je externí přístup k REST API zabezpečen a interní REST API na portu `5555` naslouchá výhradně na lokálním rozhraní stanice (`127.0.0.1`).
+
+Pro vývoj a testování skriptů přímo z vývojářského počítače (nebo při testování REST API v API klientech) je nejvhodnějším přístupem vytvoření **SSH tunelu**.
+
+#### Vytvoření SSH tunelu
+Spusťte ve vašem terminálu nebo PowerShellu tento příkaz, který přesměruje port `5555` z vašeho počítače přímo na interní rozhraní stanice:
+
+```bash
+ssh -L 5555:127.0.0.1:5555 user-app@<ip-address>
