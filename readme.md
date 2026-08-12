@@ -61,4 +61,4 @@ Pro vývoj a testování skriptů přímo z vývojářského počítače (nebo p
 Spusťte ve vašem terminálu nebo PowerShellu tento příkaz, který přesměruje port `5555` z vašeho počítače přímo na interní rozhraní stanice:
 
 ```bash
-ssh -L 5555:127.0.0.1:5555 user-app@<ip-address>
+ssh -L 5555:127.0.0.1:5555 -L 1883:127.0.0.1:1883 user-app@<ip-address>
