@@ -81,7 +81,7 @@ def set_logging(config) -> None:
     # Set the log file max size
     log_max_size = int(config["LogSettings"]["LogFileQuotaMBytes"]) * 1024 * 1024
     # Set the log format
-    log_format = "%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s"
+    log_format = "%(asctime)s [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s"
 
     # Set the log handler
     rfh = RotatingFileHandler(
@@ -185,6 +185,98 @@ def send_request(
 ################################################
 ############# END SEND API REQUEST #############
 ################################################
+
+
+###################################################
+############# ENSURE MQTT CREDENTIALS #############
+###################################################
+
+
+def ensure_mqtt_credentials() -> Tuple[Optional[str], Optional[str]]:
+    """
+    Ensures MqttUser and MqttPassword exist in config.
+    If missing, fetches them from EMM API using ApiKey and persists them to charging_data.conf.
+    
+    Returns:
+        tuple: (mqtt_user, mqtt_password)
+    """
+    config = load_config()
+
+    emm_mqtt_user = config["EmmSettings"].get("MqttUser", "").strip()
+    emm_mqtt_password = config["EmmSettings"].get("MqttPassword", "").strip()
+
+    # If credentials already exist in config, return them immediately
+    if emm_mqtt_user and emm_mqtt_password:
+        return emm_mqtt_user, emm_mqtt_password
+
+    logging.info("MQTT credentials missing in config. Fetching from EMM API using ApiKey...")
+
+    EMM_HOST = config["EmmSettings"].get("Host", "https://app.ewe.cz")
+    EMM_API_KEY = config["EmmSettings"]["ApiKey"]
+
+    if not EMM_API_KEY:
+        logging.critical("Cannot fetch MQTT credentials: ApiKey is missing in config!")
+        return None, None
+
+    # EMM API endpoint for fetching credentials
+    credentials_url = f"{EMM_HOST}/api/v2/public/mqtt-credentials"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {EMM_API_KEY}"
+    }
+
+    # Fetch credentials from EMM API
+    response = send_request(credentials_url, method="GET", headers=headers)
+
+    if not response or not response.ok:
+        logging.error(f"Failed to fetch MQTT credentials from EMM API ({credentials_url})")
+        return None, None
+
+    try:
+        data = response.json()
+        fetched_user = data.get("mqttUsername")
+        fetched_pass = data.get("mqttPassword")
+
+        if not fetched_user or not fetched_pass:
+            logging.error(f"Invalid MQTT credentials payload received from EMM API: {data}")
+            return None, None
+
+        # Update in-memory config object
+        config["EmmSettings"]["MqttUser"] = fetched_user
+        config["EmmSettings"]["MqttPassword"] = fetched_pass
+
+        # Persist newly fetched credentials to charging_data.conf on disk
+        try:
+            parser = configparser.ConfigParser()
+
+            # Preserve section casing (EmmSettings, MqttUser, etc.)
+            parser.optionxform = str
+            parser.read(config_path)
+
+            if "EmmSettings" not in parser:
+                parser["EmmSettings"] = {}
+
+            parser["EmmSettings"]["MqttUser"] = fetched_user
+            parser["EmmSettings"]["MqttPassword"] = fetched_pass
+
+            with open(config_path, "w", encoding="utf-8") as f:
+                parser.write(f, space_around_delimiters=False)
+
+            logging.info(f"Successfully fetched and persisted MQTT credentials to {config_path}")
+
+        except Exception as file_err:
+            logging.warning(f"Fetched MQTT credentials successfully, but failed to write to config file ({config_path}): {file_err}")
+
+        return fetched_user, fetched_pass
+
+    except Exception as e:
+        logging.error(f"Error processing MQTT credentials response: {e}", exc_info=True)
+        return None, None
+
+
+#######################################################
+############# END ENSURE MQTT CREDENTIALS #############
+#######################################################
 
 
 ###############################################
