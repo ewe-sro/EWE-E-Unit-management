@@ -3,7 +3,7 @@
 Python skripty v tom repozitáři se primárně starají o propojení nabíjecí stanice s webovou aplikací EMM.
 
 ## Aktivní skripty
-1. **_ewe-charger-agenty.py_** - skript, který zpracovává MQTT události, spravuje SQLite frontu a odesílá telemetrii do EMM. Nahrazuje dřívější skripty `save_charging_data.py` a `collect_data_json.py`.
+1. **_ewe-charger-agent.py_** - skript, který zpracovává MQTT události, spravuje SQLite frontu a odesílá telemetrii do EMM. Nahrazuje dřívější skripty `save_charging_data.py` a `collect_data_json.py`.
 2. **_sync_settings.py_** - skript, který synchronizuje nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
 3. **_update.py_** - skript, který aktualizuje skripty z tohoto repozitáře na nějnovější verzi
 4. **_utils.py_** - pomocné funkce, které jsou ve skriptech použity
@@ -34,7 +34,7 @@ Použitím skriptu `update.py` se tato konfigurace provede automaticky.
 
 ```
 # Save charging data to CSV file and send them to EMM if configured
-/usr/bin/python3 /data/user-app/charging_data/ewe-charger-agenty.py &
+/usr/bin/python3 /data/user-app/charging_data/ewe-charger-agent.py &
 ```
 
 ## Skript pro synchronizaci nastavení s EMM
