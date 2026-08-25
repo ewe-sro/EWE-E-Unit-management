@@ -286,14 +286,21 @@ def terminate_script_process(path: str):
     Returns:
         None
     """
+    current_pid = os.getpid()
     process_name = f"{python_path} {path}"
 
     for proc in psutil.process_iter(attrs=["pid", "cmdline"]):
         try:
+            # Do not terminate the current update.py process
+            if proc.info["pid"] == current_pid:
+                continue
+
+            # Safety check: skip processes without a command line (kernel threads)
+            if not proc.info.get("cmdline"):
+                continue
+
             cmdline = " ".join(proc.info["cmdline"])  # Join cmdline args into a string
-            if (
-                process_name in cmdline
-            ):  # Check if the script name appears in the command line
+            if (process_name in cmdline):  # Check if the script name appears in the command line
                 proc.terminate()  # Stop the process gracefully
 
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -497,7 +504,9 @@ def setup_cron_job(cron_expression: str, path: str):
 
             return None
 
-    return True  # Cronjob already exists
+    # Cronjob already exists
+    print(f"Cron job already exists: {cron_job}")
+    return True
 
 
 #####################################################
@@ -530,6 +539,36 @@ def update_scripts():
 
     # Loop over the script names we got from the API
     for script_name in scripts:
+        # Full path to the updated script file
+        file_path = f'{scripts[script_name]["directory"]}/{script_name}'
+
+        #####################################
+        # Handle deprecated/deleted scripts #
+        #####################################
+
+        if (scripts[script_name].get("delete") is True):
+            print(f"Cleaning up deprecated script file: {script_name}")
+
+            stop_starting_script_automatically(file_path)
+            terminate_script_process(file_path)
+
+            # Remove the file from the filesystem
+            if (os.path.exists(file_path)):
+                try:
+                    os.remove(file_path)
+                    logging.info(f"Deleted deprecated file from disk: {file_path}")
+
+                except Exception as e:
+                    logging.error(f"Failed to delete deprecated file from disk: {file_path}")
+                    print(f"[ERROR] Failed to delete deprecated file from disk: {file_path}")
+
+            continue
+
+
+        ###################################
+        # Normal download and update flow #
+        ###################################
+
         print(f"Updating script file: {script_name}")
 
         # Call the EMM API and get the script file
@@ -540,11 +579,9 @@ def update_scripts():
         )
 
         # If the API request wasn't successful go to the next file
-        if file_response is None:
+        if file_response is None or not file_response.ok:
+            print(f"[ERROR] Could not fetch script file: {script_name}")
             continue
-
-        # Full path to the file
-        file_path = f'{scripts[script_name]["directory"]}/{script_name}'
 
         # Get the file content in binary data
         file_content = file_response.content
@@ -584,4 +621,6 @@ def update_scripts():
 ############# END UPDATE SCRIPT FILES #############
 ###################################################
 
-update_scripts()
+
+if __name__ == "__main__":
+    update_scripts()
