@@ -3,11 +3,10 @@
 Python skripty v tom repozitáři se primárně starají o propojení nabíjecí stanice s webovou aplikací EMM.
 
 ## Aktivní skripty
-1. **_ewe-charger-agent.py_** - skript, který zpracovává MQTT události, spravuje SQLite frontu a odesílá telemetrii do EMM. Nahrazuje dřívější skripty `save_charging_data.py` a `collect_data_json.py`.
-2. **_sync_settings.py_** - skript, který synchronizuje nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
-3. **_update.py_** - skript, který aktualizuje skripty z tohoto repozitáře na nějnovější verzi
-4. **_utils.py_** - pomocné funkce, které jsou ve skriptech použity
-5. **_charging_data_example.conf_** - ukázka konfiguračního souboru - je potřeba vyplnit a přejmenovat na _charging_data.conf_
+1. **_ewe-charger-agent.py_** - skript, který zpracovává MQTT události a nastavení, spravuje SQLite frontu a odesílá telemetrii do EMM. Nahrazuje všechny dřívější skripty.
+2. **_update.py_** - skript, který aktualizuje skripty z tohoto repozitáře na nějnovější verzi
+3. **_utils.py_** - pomocné funkce, které jsou ve skriptech použity
+4. **_charging_data_example.conf_** - ukázka konfiguračního souboru - je potřeba vyplnit a přejmenovat na _charging_data.conf_
 
 ### Zastaralé soubory
 > [!WARNING]
@@ -15,6 +14,7 @@ Python skripty v tom repozitáři se primárně starají o propojení nabíjecí
 
 1. **_save_charging_data.py_** - původní skript pro ukládání relací do CSV souboru
 2. **_collect_data_json.py_** - původní skript pro sběr stavových dat do statického JSON souboru
+3. **_sync_settings.py_** - původní skript pro synchronizaci nastavení z EMM webové aplikace s interním nastavením nabíjecích bodů
 
 ## Instalace skriptů pomocí **_update.py_**
 
@@ -37,18 +37,10 @@ Použitím skriptu `update.py` se tato konfigurace provede automaticky.
 /usr/bin/python3 /data/user-app/charging_data/ewe-charger-agent.py &
 ```
 
-## Skript pro synchronizaci nastavení s EMM
-
-- **_sync_settings.py_**
-
-Abychom mohli změnit nastavení vzdáleně pomocí webové aplikace EMM běží na nabíjecí stanici tento skript. Skript nejdříve získá nastavení z EMM, pokud nějaká existují, tato nastavení aplikuje.
-Následně získá aktuální nastavení nabíjecího bodu a tato nastavení odešle do EMM k uložení. Tento způsob nám dovoluje upravit nastavení jak z webové aplikace, tak z lokální administrace nabíjecí stanice a zároveň zůstanou data o nastavení v EMM konzistentní.
-
 ### Manuální spuštění skriptů bez nutnosti restartu
 
 ```
 nohup /usr/bin/python3 /data/user-app/charging_data/ewe-charger-agent.py &
-nohup /usr/bin/python3 /data/user-app/charging_data/sync_settings.py &
 ```
 
 ### Lokální vývoj a testování (firmware 1.9.1+)
