@@ -1,0 +1,50 @@
+---
+description: Python 3.7.2 / 3.10.20 dual-runtime compatibility for CHARX controllers.
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python Dual-Runtime Compatibility
+
+Controllers ship two Python runtimes depending on CHARX firmware:
+
+| Firmware | Python on controller |
+| --- | --- |
+| **< 1.9.0** | **3.7.2** |
+| **≥ 1.9.0** | **3.10.20** |
+
+**All agent code must run on both.** Target the intersection: write as if the lowest common version is **3.7.2**.
+
+## Forbidden (breaks 3.7)
+```python
+# ❌ BAD — 3.8+ / 3.9+ / 3.10+ only
+from typing import Literal
+x: list[str] = []
+y: dict[str, int] = {}
+z: str | None = None
+(a := 1)
+match value:
+    case 1: ...
+```
+
+## Required patterns
+```python
+# ✅ GOOD — works on 3.7 and 3.10
+from typing import Dict, List, Optional, Tuple, Any, Union
+
+x: List[str] = []
+y: Dict[str, int] = {}
+z: Optional[str] = None
+
+def handler(payload: Dict[str, Any]) -> Tuple[bool, str]:
+    return True, "ok"
+```
+
+## Practical rules
+1. Use `typing.List` / `Dict` / `Optional` / `Tuple` / `Union` — never PEP 585 builtins (`list[]`, `dict[]`) or `|` unions.
+2. No walrus `:=`, no `match`/`case`, no `TypedDict`/`Literal` unless already proven present and needed (prefer plain dicts).
+3. Stick to stdlib + packages already available on the controller (`paho-mqtt`, `requests`, `sqlite3`, …). See `@site_packages.txt` for the older image inventory; do not assume pip install on devices.
+4. Prefer `concurrent.futures` / `threading` over `asyncio` for new work (agent is already threaded).
+5. Keep f-strings (OK since 3.6). Avoid `zoneinfo`, `graphlib`, `tomllib`, and other post-3.7 stdlib modules.
+6. When adding type hints, smoke-check mentally against 3.7; if unsure, use untyped locals rather than 3.10-only syntax.
+7. Local venv may be 3.7 or newer — never treat the developer machine version as the controller version.

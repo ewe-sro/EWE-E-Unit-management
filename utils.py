@@ -110,6 +110,62 @@ import requests
 Response = requests.models.Response
 
 
+def _is_binary_content_type(content_type: Optional[str]) -> bool:
+    """True when Content-Type looks like a binary / archive payload."""
+
+    if not content_type:
+        return False
+
+    ct = content_type.lower()
+
+    return (
+        "tar" in ct
+        or "gzip" in ct
+        or "octet-stream" in ct
+        or "application/zip" in ct
+    )
+
+
+def _format_error_body_for_log(
+    response: Response,
+    files: Optional[Any] = None,
+) -> str:
+    """
+    Build a log-safe representation of an error response body.
+    Skips or truncates binary / huge payloads so archives never flood logs.
+    JSON / text error responses are always logged (even when the request used files=).
+    """
+
+    content_type = response.headers.get("Content-Type", "")
+    ct_lower = content_type.lower()
+
+    # Prefer logging JSON/text API errors; only omit true binary bodies
+    if "json" in ct_lower or ct_lower.startswith("text/"):
+        text = response.text or ""
+        max_len = 500
+
+        if len(text) > max_len:
+            return f"{text[:max_len]}...<truncated, {len(text)} bytes total>"
+
+        return text
+
+    if files is not None or _is_binary_content_type(content_type):
+        body_len = len(response.content) if response.content is not None else 0
+
+        return (
+            f"<binary body omitted, {body_len} bytes, "
+            f"Content-Type={content_type!r}>"
+        )
+
+    text = response.text or ""
+    max_len = 500
+
+    if len(text) > max_len:
+        return f"{text[:max_len]}...<truncated, {len(text)} bytes total>"
+
+    return text
+
+
 def send_request(
     url: str,
     method: str,
@@ -118,6 +174,8 @@ def send_request(
     data: Optional[Dict[str, Any]] = None,
     json: Optional[Dict[str, Any]] = None,
     timeout: int = 10,
+    verify: bool = True,
+    files: Optional[Any] = None,
 ) -> Optional[Response]:
     """
     Make an HTTP request with error logging. Continues execution on error.
@@ -130,8 +188,12 @@ def send_request(
         data: Optional dictionary of form data
         json: Optional dictionary of JSON data
         timeout: Request timeout in seconds
+        verify: TLS certificate verification (pass False for self-signed WBM HTTPS)
+        files: Optional multipart file payload; when set, default JSON Content-Type
+            is not injected so requests can set the multipart boundary
     Returns:
-        The response if successful, None if failed
+        The response if successful or HTTP error (≥400 still returned),
+        None only on transport / request failures
     """
 
     # Validate the supplied method
@@ -140,9 +202,19 @@ def send_request(
         logging.error(f"Invalid HTTP method: {method}")
         return None
 
-    # Set default headers if none provided
+    # Set default headers if none provided.
+    # Multipart uploads must not get Content-Type: application/json — requests
+    # needs to set the boundary itself.
     if headers is None:
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if files is not None:
+            headers = {"Accept": "application/json"}
+        else:
+            headers = {"Content-Type": "application/json", "Accept": "application/json"}
+            
+    elif files is not None and any(k.lower() == "content-type" for k in headers):
+        # Caller may have reused JSON headers; drop Content-Type so the
+        # multipart boundary can be set by requests.
+        headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
 
     try:
         # Send the API request
@@ -154,12 +226,15 @@ def send_request(
             data=data,
             json=json,
             timeout=timeout,
+            verify=verify,
+            files=files,
         )
 
-        # Log but don't raise for bad status codes
+        # Log but don't raise for bad status codes; keep bodies log-safe
         if response.status_code >= 400:
+            body_for_log = _format_error_body_for_log(response, files=files)
             logging.error(
-                f"HTTP {response.status_code} error occurred: {response.text}. URL: {url}"
+                f"HTTP {response.status_code} error occurred: {body_for_log}. URL: {url}"
             )
 
         # Return the response

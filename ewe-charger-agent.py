@@ -26,6 +26,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any
 
+import charx_website
 from utils import (
     load_config,
     set_logging,
@@ -70,6 +71,8 @@ def get_device_lock(device_uid: str) -> threading.Lock:
 
 # Thread pools
 event_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="EV-Event")
+# Long-running remote commands (e.g. DOWNLOAD_LOGS) — keep off the Paho callback thread
+command_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="EV-Cmd")
 
 # MQTT and API Settings
 MQTT_HOST = config["Mqtt"]["Host"]
@@ -84,6 +87,7 @@ EMM_HOST = config["EmmSettings"].get("Host", "https://app.ewe.cz")
 EMM_API_KEY = config["EmmSettings"]["ApiKey"]
 EMM_SESSION_ENDPOINT = config["EmmSettings"].get("SessionEndpoint", "/api/v2/public/charging-session")
 EMM_TELEMETRY_ENDPOINT = config["EmmSettings"].get("TelemetryEndpoint", "/api/v2/public/controller-telemetry")
+EMM_CHARGER_LOGS_ENDPOINT = config["EmmSettings"].get("ChargerLogsEndpoint", "/api/v2/public/charger-logs")
 EMM_HEADERS = {
     "Content-Type": "application/json",
     "Content-Encoding": "gzip",
@@ -836,12 +840,13 @@ def validate_controller(payload: Dict[str, Any]) -> tuple:
     return True, None
 
 
-def handle_restart(payload: Dict[str, Any]) -> tuple:
+def handle_restart(payload: Dict[str, Any], _command_id: str) -> tuple:
     """
     Restarts a specific charging controller on the charger.
     
     Args:
         payload: Dict containing required 'deviceUid'.
+        _command_id: MQTT command id (unused for sync handlers).
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -863,12 +868,13 @@ def handle_restart(payload: Dict[str, Any]) -> tuple:
     return True, f"Úspěšně vyžádán restart pro nabíjecí bod {device_uid}"
 
 
-def handle_force_leds(payload: Dict[str, Any]) -> tuple:
+def handle_force_leds(payload: Dict[str, Any], _command_id: str) -> tuple:
     """
     Toggles or sets force_leds for one specific controller.
     
     Args:
         payload: Dict containing optional 'deviceUid'.
+        _command_id: MQTT command id (unused for sync handlers).
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -909,12 +915,13 @@ def handle_force_leds(payload: Dict[str, Any]) -> tuple:
     return True, f"LED diody byly úspěšně {state_text} pro nabíjecí bod {device_uid}"
 
 
-def handle_start_charging(payload: Dict[str, Any]) -> tuple:
+def handle_start_charging(payload: Dict[str, Any], _command_id: str) -> tuple:
     """
     Starts charging on a specific controller.
     
     Args:
         payload: Dict containing required 'deviceUid'.
+        _command_id: MQTT command id (unused for sync handlers).
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -969,12 +976,13 @@ def handle_start_charging(payload: Dict[str, Any]) -> tuple:
     return True, f"Spuštění nabíjení bylo úspěšně vyžádáno pro nabíjecí bod {device_uid}"
 
 
-def handle_stop_charging(payload: Dict[str, Any]) -> tuple:
+def handle_stop_charging(payload: Dict[str, Any], _command_id: str) -> tuple:
     """
     Stops charging on a specific controller.
     
     Args:
         payload: Dict containing required 'deviceUid'.
+        _command_id: MQTT command id (unused for sync handlers).
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -1023,12 +1031,13 @@ def handle_stop_charging(payload: Dict[str, Any]) -> tuple:
     return True, f"Ukončení nabíjení bylo úspěšně vyžádáno pro nabíjecí bod {device_uid}"
 
 
-def handle_update_settings(payload: Dict[str, Any]) -> tuple:
+def handle_update_settings(payload: Dict[str, Any], _command_id: str) -> tuple:
     """
     Updates the charging point configuration on the Phoenix Contact controller.
     
     Args:
         payload: Dict containing 'deviceUid' and setting fields.
+        _command_id: MQTT command id (unused for sync handlers).
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -1079,12 +1088,149 @@ def handle_update_settings(payload: Dict[str, Any]) -> tuple:
     return True, f"Nastavení bylo úspěšně uloženo pro nabíjecí bod {device_uid}"
 
 
+def handle_download_logs(client: mqtt.Client, command_id: str, payload: Dict[str, Any]) -> None:
+    """
+    Handles DOWNLOAD_LOGS: WBM login → log pack download → HTTPS upload → MQTT ACK.
+
+    Runs on command_executor so long packing does not block the Paho callback thread.
+    Never logs webPassword. Archive bytes stay off MQTT.
+    """
+
+    action = "DOWNLOAD_LOGS"
+
+    try:
+        web_username = payload.get("webUsername")
+        web_password = payload.get("webPassword")
+
+        if not web_username or not web_password:
+            send_command_response(
+                client,
+                command_id,
+                action,
+                "failed",
+                "Chybí přihlašovací údaje k webovému rozhraní",
+            )
+            return
+
+        with TELEMETRY_LOCK:
+            telemetry_snapshot = dict(telemetry_buffer)
+
+        firmware_version = charx_website.resolve_firmware_version(
+            telemetry_snapshot,
+            REST_API_HOST,
+            REST_API_PORT,
+        )
+
+        access_token = charx_website.login(
+            web_username,
+            web_password,
+            firmware_version,
+            REST_API_HOST,
+        )
+        if not access_token:
+            send_command_response(
+                client,
+                command_id,
+                action,
+                "failed",
+                "Přihlášení k webovému rozhraní se nezdařilo",
+            )
+            return
+
+        archive_bytes = charx_website.download_logs(
+            access_token,
+            firmware_version,
+            REST_API_HOST,
+            timeout=300,
+        )
+        if not archive_bytes:
+            send_command_response(
+                client,
+                command_id,
+                action,
+                "failed",
+                "Nepodařilo se stáhnout archiv logů",
+            )
+            return
+
+        # Origin must match EMM host so SvelteKit CSRF allows multipart/form-data
+        # from the agent (no browser Origin). Do not use csrf.trustedOrigins: ['*'].
+        upload_headers = {
+            "Authorization": f"Bearer {EMM_API_KEY}",
+            "Origin": EMM_HOST.rstrip("/"),
+        }
+        
+        upload_url = f"{EMM_HOST}{EMM_CHARGER_LOGS_ENDPOINT}"
+        upload_response = send_request(
+            upload_url,
+            "POST",
+            headers=upload_headers,
+            data={"commandId": command_id},
+            files={"file": ("logs.tar.gz", archive_bytes, "application/tar+gzip")},
+            timeout=120,
+        )
+
+        # Drop large buffer ASAP; do not persist to disk
+        archive_bytes = None
+
+        if upload_response is None or upload_response.status_code != 201:
+            status_code = upload_response.status_code if upload_response is not None else None
+            response_body = ""
+            if upload_response is not None:
+                try:
+                    response_body = (upload_response.text or "")[:300]
+                except Exception:
+                    response_body = "<unreadable body>"
+            logging.error(
+                "DOWNLOAD_LOGS upload failed: HTTP %s. commandId=%s URL=%s body=%s",
+                status_code,
+                command_id,
+                upload_url,
+                response_body,
+            )
+            send_command_response(
+                client,
+                command_id,
+                action,
+                "failed",
+                "Nahrání logů do EMM se nezdařilo",
+            )
+            return
+
+        send_command_response(
+            client,
+            command_id,
+            action,
+            "success",
+            "Logy byly úspěšně nahrány",
+        )
+
+    except Exception as e:
+        logging.error(f"DOWNLOAD_LOGS job failed: {e}", exc_info=True)
+        try:
+            send_command_response(
+                client,
+                command_id,
+                action,
+                "failed",
+                "Došlo k chybě při stahování logů",
+            )
+        except Exception as ack_err:
+            logging.error(f"Failed to publish DOWNLOAD_LOGS failure ACK: {ack_err}", exc_info=True)
+
+
+# Sync handlers: (payload, command_id) -> (success, message); ACK on callback thread
 COMMAND_HANDLERS = {
     "RESTART": handle_restart,
     "FORCE_LEDS": handle_force_leds,
     "START_CHARGING": handle_start_charging,
     "STOP_CHARGING": handle_stop_charging,
-    "UPDATE_SETTINGS": handle_update_settings
+    "UPDATE_SETTINGS": handle_update_settings,
+}
+
+# Async handlers: submit to command_executor; they ACK themselves (no sync return)
+ASYNC_COMMAND_HANDLERS = {
+    "DOWNLOAD_LOGS": handle_download_logs,
 }
 
 
@@ -1180,6 +1326,13 @@ def on_emm_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage
             logging.warning(f"Received invalid command payload structure: {data}")
             return
 
+        # Long-running commands: offload and return without ACK on this thread
+        async_handler = ASYNC_COMMAND_HANDLERS.get(action)
+        if async_handler is not None:
+            command_executor.submit(async_handler, client, command_id, payload)
+            logging.info(f"Submitted async command {action} ({command_id}) to command_executor")
+            return
+
         handler = COMMAND_HANDLERS.get(action)
 
         if not handler:
@@ -1189,7 +1342,7 @@ def on_emm_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage
             logging.warning(f"Unsupported command action: {action}")
             return
 
-        success, result_message = handler(payload)
+        success, result_message = handler(payload, command_id)
         status = "success" if success else "failed"
 
         # Send ACK response back to SvelteKit over EMM MQTT
@@ -1254,6 +1407,7 @@ if __name__ == "__main__":
     
         STOP_EVENT.set()
         event_executor.shutdown(wait=True)
+        command_executor.shutdown(wait=True)
         
         local_mqtt.disconnect()
         local_mqtt.loop_stop()
@@ -1267,6 +1421,7 @@ if __name__ == "__main__":
         
         STOP_EVENT.set()
         event_executor.shutdown(wait=True)
+        command_executor.shutdown(wait=True)
     
         local_mqtt.disconnect()
         local_mqtt.loop_stop()

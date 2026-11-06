@@ -1,0 +1,75 @@
+---
+description: Remote MQTT command handling — dispatch, handlers, ACK contract with EMM.
+globs: "**/ewe-charger-agent.py"
+alwaysApply: false
+---
+
+# Remote Command Logic
+
+## Flow
+1. EMM UI/API → `POST /api/mqtt/{mqttUsername}/command` → DB row `pending` → publish MQTT → `sent`.
+2. Agent `on_emm_message` parses JSON → looks up `ASYNC_COMMAND_HANDLERS[action]` first, else `COMMAND_HANDLERS[action]`.
+3. Sync handlers run on the Paho callback thread and return `(success, message)` for immediate ACK.
+4. Async handlers (today: `DOWNLOAD_LOGS`) are submitted to `command_executor` (dedicated pool, `max_workers=1`); **no ACK until the job finishes**.
+5. Agent publishes ACK on `charger/{user}/response`.
+6. EMM subscriber updates `mqtt_command.status` / `message`.
+
+## Envelope (inbound)
+```json
+{
+  "commandId": "cmd_…",
+  "action": "START_CHARGING",
+  "payload": { "deviceUid": "002544" },
+  "timestamp": "…"
+}
+```
+
+## ACK (outbound)
+```json
+{
+  "commandId": "cmd_…",
+  "action": "START_CHARGING",
+  "status": "success",
+  "message": "Spuštění nabíjení bylo úspěšně vyžádáno pro nabíjecí bod 002544",
+  "timestamp": "2026-03-13T08:36:47"
+}
+```
+- `message` is Czech, short, operator-facing.
+- Unknown `action` → ACK `failed` (do not crash).
+- Never put archive bytes or binary fields on MQTT.
+
+## Implemented handlers (`COMMAND_HANDLERS` — sync)
+| Action | Needs `deviceUid` | Local effect |
+| --- | --- | --- |
+| `RESTART` | yes | `POST .../charging-controllers/{uid}/restart` |
+| `FORCE_LEDS` | yes | Toggle `force_leds` via GET then PUT control |
+| `START_CHARGING` | yes | Require IEC state in B/C/D family; PUT `external_release/locking/charge_enable` |
+| `STOP_CHARGING` | yes | Require connected state; PUT release off / unlock |
+| `UPDATE_SETTINGS` | yes | Map camelCase payload `settings` → snake_case; PUT charging-point config |
+
+Always call `validate_controller(payload)` first for controller-scoped actions.
+
+### Settings key map (EMM → Phoenix)
+`chargingPointName`→`charging_point_name`, `location`→`location`, `releaseChargingMode`→`release_charging_mode`, `minimumChargeCurrent`→`minimum_charge_current`, `maximumChargeCurrent`→`maximum_charge_current`, `fallbackChargeCurrent`→`fallback_charge_current`.
+
+## Implemented async handlers (`ASYNC_COMMAND_HANDLERS`)
+| Action | Needs `deviceUid` | Local effect |
+| --- | --- | --- |
+| `DOWNLOAD_LOGS` | no (charger-level) | WBM login (`webUsername`/`webPassword` from payload) → GET log pack → HTTPS multipart upload to `{EMM_HOST}/api/v2/public/charger-logs` (`commandId` + Bearer ApiKey) → ACK. Archive never on MQTT. Runs on `command_executor`. |
+
+WBM credentials come only from the MQTT payload — never write them to logs or `charging_data.conf`. FW branching for WBM HTTP vs HTTPS lives in `charx_website.py`.
+
+## EMM actions to support when implementing
+EMM also defines (see management `MqttAction`):
+- `UNLOCK_CONNECTOR` — not yet in agent handlers.
+
+## Deploy note — `charx_website.py`
+Library module used by `DOWNLOAD_LOGS` (import only; not a long-lived process).
+
+EMM script catalog (`GET /api/public/script` in the management app, not this repo) **must** list `charx_website.py` with `persistent: false` so `update.py` downloads it under `/data/user-app/...` but does **not** autostart or keep a process for it. Ship alongside updated `ewe-charger-agent.py` + `utils.py`.
+
+## Handler rules
+1. Sync handlers return `(success: bool, message: str)` — never raise; log and return `False`. Async jobs publish ACK themselves and must catch all exceptions (Czech failed message).
+2. Register every new sync action in `COMMAND_HANDLERS` and every long-running action in `ASYNC_COMMAND_HANDLERS` with the **exact** EMM action string.
+3. Prefer idempotent / safe failure when vehicle state is wrong (explicit Czech reason).
+4. Do not log plaintext WBM passwords from `DOWNLOAD_LOGS` payloads.

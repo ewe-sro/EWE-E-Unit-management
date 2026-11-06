@@ -1,0 +1,42 @@
+---
+description: Phoenix Contact CHARX firmware (≥1.9.x) breaking changes that affect the Python agent — auth/TLS, localhost REST, MQTT topic rules, Python runtime.
+alwaysApply: false
+---
+
+# CHARX Firmware Notes (Agent Impact)
+
+Source of truth for releases: Phoenix Contact *CHARX control modular* release notes (e.g. FW 1.9.2). Product family: CHARX SEC-xxxx.
+
+## Python runtime (EWE policy)
+- FW **≥ 1.9.0** → Python **3.10.20**
+- FW **< 1.9.0** → Python **3.7.2**
+- Agent code must stay backward-compatible with both (see Python compat rule).
+
+## FW 1.9.1 — major security / integration break
+Full-system RAUC update. Critical for agent developers:
+
+- **Auth + TLS mandatory** for externally reachable MQTT and REST. Unauthenticated external access is rejected.
+- **External REST/MQTT ports changed**; internal loopback API used by the agent remains `127.0.0.1:5555` (REST) and local MQTT `1883`, but remote laptop access needs an **SSH tunnel** (see `@readme.md`).
+- **System MQTT topics are read-only.** Publish custom data only under `/user-app` (bridge forwards under `/user-app/remote`). Do not write system `charging_controllers/...` topics.
+- MQTT clients must use a **controlled reconnect strategy** during reboots (avoid reconnect storms → temporary bans). Agent already uses `reconnect_delay_set`.
+- Passwords reset when **downgrading** from ≥1.9.1 to <1.9.1.
+- Older **IPKs are incompatible** with 1.9.1+.
+- Many CVEs fixed around MQTT auth, user-applications init, OCPP, JupiCore, Modbus reboot exposure.
+
+## FW 1.9.0
+- Full-system update: Plug & Charge, new meters, cyber improvements.
+- Bundled Python libs have known CVEs (`python3-cryptography`, `urllib3`, `aiohttp`, `pyOpenSSL`) — avoid relying on vulnerable crypto patterns in custom code; prefer the existing `requests`/`paho` stack.
+
+## FW 1.9.2
+- Load-management **IPK only** on top of 1.9.1 (not a full OS bump). Fix for smart-charging 0A profile sequences.
+
+## FW 1.8.0 (pre-1.9 context)
+- Yocto 4.0.26; new SDK — user applications may need rebuild for that era.
+- SSH closed by default in factory settings; minimize open ports.
+- Legal-metrology mode removed / OCMF default for compatible meters.
+
+## Agent operational guidance
+1. Treat **localhost REST + local MQTT** as the only supported control path from the agent.
+2. For laptop debugging on FW ≥1.9.1: `ssh -L 5555:127.0.0.1:5555 -L 1883:127.0.0.1:1883 user-app@<ip>`.
+3. Autostart remains via `user-application-start` launching `/usr/bin/python3 .../ewe-charger-agent.py &` (installed by `@update.py`).
+4. When Phoenix changes REST shapes, update agent parsing carefully and keep EMM Zod schemas in sync via the management repo.

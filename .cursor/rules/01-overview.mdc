@@ -1,0 +1,38 @@
+---
+description: Project overview — Phoenix Contact CHARX agent bridging E-Units to EWE Mobility Management (EMM).
+alwaysApply: true
+---
+
+# EWE E-Unit Management — Overview
+
+## What this repo is
+Python daemon scripts that run **on the charger** (Phoenix Contact CHARX SEC controllers) and bridge the station to the cloud **EWE Mobility Management (EMM)** SvelteKit app (`ewe-sro/EWE-mobility-management`).
+
+Primary runtime path on the controller:
+`/data/user-app/charging_data/`
+
+## Active scripts
+| File | Role |
+| --- | --- |
+| `@ewe-charger-agent.py` | Main agent: local MQTT events, SQLite queue, EMM MQTT telemetry/commands, HTTP session upload |
+| `@utils.py` | Shared helpers (config, HTTP, SQLite queue/RFID/telemetry, MQTT credential bootstrap) |
+| `@update.py` | Pulls latest scripts from this repo onto the controller and wires autostart |
+| `charging_data.conf` | Runtime config (copy from `@charging_data_example.conf`) |
+
+Legacy scripts (`save_charging_data.py`, `collect_data_json.py`, `sync_settings.py`) are archive-only — never extend them.
+
+## Hardware
+- Manufacturer: **Phoenix Contact**
+- Controllers: CHARX SEC-xxxx (e.g. SEC-3150 / 3100 / 3050 / 3000 / 1000)
+- Local interfaces the agent uses:
+  - **REST API** `http://127.0.0.1:5555/api/v1.0/...` (JupiCore / Controller Agent)
+  - **Local MQTT** `127.0.0.1:1883` topics under `charging_controllers/{device_uid}/data/...`
+
+## Paired cloud app
+EMM (SvelteKit) owns Mosquitto + PostgreSQL. The agent is a thin edge client: it does **not** talk to the browser; it talks to EMM over MQTT (realtime) and HTTPS (sessions / credentials / large uploads).
+
+## Engineering constraints
+- Keep the agent resilient: never crash the main loop on a single bad message or failed HTTP call.
+- Prefer extending `@ewe-charger-agent.py` + `@utils.py` over adding new long-lived processes.
+- User-facing command ACK messages stay in **Czech** (short, operator-readable).
+- Before changing MQTT payload shapes or command actions, check the EMM contracts in the sibling management app (`src/lib/server/mqtt/`).

@@ -1,0 +1,57 @@
+---
+description: MQTT and HTTPS communication between the CHARX Python agent and the SvelteKit EMM app.
+globs: "**/ewe-charger-agent.py, **/utils.py, **/update.py"
+alwaysApply: false
+---
+
+# Agent ↔ EMM Communication
+
+The agent maintains **two MQTT clients** plus **HTTPS** to EMM.
+
+```
+CHARX local bus          Agent                     EMM (SvelteKit + Mosquitto)
+─────────────────        ─────                     ────────────────────────────
+local MQTT 1883  ──►  subscribe events
+REST :5555       ◄──  GET/PUT control
+                         │
+                         ├─ EMM MQTT 8883/TLS ──► charger/{user}/telemetry
+                         ├─ EMM MQTT 8883/TLS ──► charger/{user}/error_status
+                         ├─ EMM MQTT 8883/TLS ◄── charger/{user}/command
+                         ├─ EMM MQTT 8883/TLS ──► charger/{user}/response
+                         └─ HTTPS Bearer ApiKey ─► /api/v2/public/...
+```
+
+## Credentials
+- Config: `@charging_data_example.conf` → `[EmmSettings]` `ApiKey`, optional `MqttUser`/`MqttPassword`.
+- If MQTT user/pass missing, `@utils.py` `ensure_mqtt_credentials()` GETs `/api/v2/public/mqtt-credentials` with the ApiKey and persists them to `charging_data.conf`.
+- Topic prefix is always `charger/{MqttUser}/...`.
+
+## Local MQTT (Phoenix)
+Subscribe on connect:
+- `charging_controllers/+/data/iec_61851_state` → session start/end logic
+- `charging_controllers/+/data/energy` → energy buffer for pulses
+- `charging_controllers/+/data/rfid` → RFID buffer for pairing
+- `charging_controllers/+/data/error_status_int` → enrich via REST, forward to EMM
+
+## EMM MQTT topics
+| Topic | Direction | Purpose |
+| --- | --- | --- |
+| `.../telemetry` | Agent → EMM | `type: "initial"` once on EMM connect; `type: "pulse"` ~every 10s |
+| `.../error_status` | Agent → EMM | `{device_uid, error_status_int, error_status_enum}` |
+| `.../command` | EMM → Agent | Remote actions (QoS 1 from EMM) |
+| `.../response` | Agent → EMM | Command ACK `{commandId, action, status, message, timestamp}` QoS 1 |
+
+## HTTPS (not MQTT)
+- Charging sessions: gzipped JSON POST `/api/v2/public/charging-session` from the SQLite queue worker (retries with backoff; `404` → `failed_unrecoverable`).
+- Large binaries (e.g. log archives): **never** over MQTT — use the public multipart upload APIs defined by EMM.
+
+## Reliability patterns already in the agent
+- SQLite WAL queue for session events (`start` / `rfid` / `end`).
+- Per-`device_uid` locks + thread pool for IEC state handling.
+- Telemetry buffer + heartbeat thread; publish only if `emm_mqtt.is_connected()`.
+- TLS on EMM MQTT when port is `8883` (`tls_set()`).
+
+## When changing protocols
+1. Keep outbound telemetry keys snake_case as EMM Zod schemas expect.
+2. Keep command envelopes: `{commandId, action, payload, timestamp}`.
+3. ACK `status` must be exactly `"success"` or `"failed"` (lowercase).
